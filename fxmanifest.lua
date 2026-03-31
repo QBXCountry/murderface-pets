@@ -18,9 +18,11 @@ client_scripts {
     '@qbx_core/modules/playerdata.lua',
     'client/functions.lua',
     'client/client.lua',
-'client/guard.lua',
+    'client/leash.lua',
+    'client/guard.lua',
     'client/strays.lua',
     'client/doghouse.lua',
+    'client/petshop.lua',
     'client/menu.lua',
 }
 
@@ -28,6 +30,7 @@ server_scripts {
     '@oxmysql/lib/MySQL.lua',
     'server/functions.lua',
     'server/server.lua',
+    'server/petshop.lua',
 }
 
 dependencies {

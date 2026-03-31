@@ -415,6 +415,15 @@ RegisterNetEvent('murderface-pets:server:deleteEntity', function(netId)
 end)
 
 -- ============================
+--    Leash Sync Relay
+-- ============================
+
+RegisterNetEvent('murderface-pets:server:syncLeash', function(petNetId, leashed, propModel)
+    local src = source
+    TriggerClientEvent('murderface-pets:client:syncLeash', -1, src, petNetId, leashed, propModel)
+end)
+
+-- ============================
 --    Pet Item Exports
 -- ============================
 
@@ -1571,7 +1580,7 @@ lib.addCommand('addpet', {
     params = {
         { name = 'petname', type = 'string', help = 'Pet item name (e.g. murderface_husky)' },
     },
-    restricted = 'group.admin',
+    restricted = 'group.god',
 }, function(source, args)
     exports.ox_inventory:AddItem(source, args.petname, 1)
 end)
@@ -1582,7 +1591,7 @@ lib.addCommand('petrestore', {
         { name = 'citizenid', type = 'string', help = 'Player citizenid' },
         { name = 'hash',      type = 'string', help = 'Pet item hash' },
     },
-    restricted = 'group.admin',
+    restricted = 'group.god',
 }, function(source, args)
     local rows = MySQL.query.await(
         'SELECT * FROM murderface_pets WHERE citizenid = ? AND item_hash = ?',
@@ -1607,7 +1616,7 @@ end)
 
 lib.addCommand('petdebug', {
     help = 'Show server-side stats for your active pets (Admin)',
-    restricted = 'group.admin',
+    restricted = 'group.god',
 }, function(source)
     local src = source
     if not Pet.players[src] then

@@ -62,6 +62,7 @@ end
 -- ============================
 
 function makeEntityFaceEntity(entity1, entity2)
+    if not DoesEntityExist(entity1) or not DoesEntityExist(entity2) then return end
     local p1 = GetEntityCoords(entity1, true)
     local p2 = GetEntityCoords(entity2, true)
     local heading = GetHeadingFromVector_2d(p2.x - p1.x, p2.y - p1.y)
@@ -73,10 +74,15 @@ end
 -- ============================
 
 function TaskFollowTargetedPlayer(follower, targetPlayer, distanceToStopAt, skip)
-    ClearPedTasks(follower)
+    if not DoesEntityExist(follower) or not DoesEntityExist(targetPlayer) then return false end
+    if IsEntityDead(follower) then return false end
+
     if skip == false then
+        ClearPedTasks(follower)
         TaskGoToCoordAnyMeans(follower, GetEntityCoords(targetPlayer), 10.0, 0, 0, 0, 0)
-        Wait(5000)
+        Wait(3000)
+        -- Re-check after wait
+        if not DoesEntityExist(follower) or IsEntityDead(follower) then return false end
     end
     -- Use level-based speed if the follower is an active pet
     local moveSpeed = 5.0
@@ -84,7 +90,9 @@ function TaskFollowTargetedPlayer(follower, targetPlayer, distanceToStopAt, skip
     if activePed and activePed.entity == follower then
         moveSpeed = Config.getFollowSpeed(activePed.item.metadata.level or 0)
     end
-    TaskFollowToOffsetOfEntity(follower, targetPlayer, 2.5, 2.5, 2.5, moveSpeed, 10.0, distanceToStopAt, 1)
+    -- Follow directly behind player, tight offset, infinite timeout, navmesh pathing
+    -- timeout=-1 keeps the task alive until explicitly cleared
+    TaskFollowToOffsetOfEntity(follower, targetPlayer, 0.0, -1.5, 0.0, moveSpeed, -1, distanceToStopAt, true)
     return true
 end
 
@@ -151,13 +159,18 @@ end
 function CreateAPed(hash, pos)
     lib.requestModel(hash)
     local ped = CreatePed(5, hash, pos.x, pos.y, pos.z, 0.0, true, false)
+    local timeout = 0
     while not DoesEntityExist(ped) do
         Wait(10)
+        timeout = timeout + 1
+        if timeout > 200 then return 0 end -- 2s timeout, prevent infinite loop
     end
 
     SetBlockingOfNonTemporaryEvents(ped, true)
     SetPedFleeAttributes(ped, 0, 0)
     SetPedRelationshipGroupHash(ped, petGroupHash)
+    SetPedDiesInWater(ped, false)
+    SetPedConfigFlag(ped, 65, false) -- CPED_CONFIG_FLAG_DiesInstantlyInWater
     SetModelAsNoLongerNeeded(hash)
 
     if Config.debug then
@@ -200,6 +213,7 @@ end
 ---@return boolean success
 function putPetInVehicle(vehicle, ped)
     if not vehicle or vehicle == 0 then return false end
+    if not DoesEntityExist(vehicle) or not DoesEntityExist(ped) then return false end
     local maxSeats = GetVehicleMaxNumberOfPassengers(vehicle)
     for seat = 0, maxSeats - 1 do
         if IsVehicleSeatFree(vehicle, seat) then
@@ -220,6 +234,7 @@ function getIntoCar()
     if not activePet then return end
 
     local petPed = activePet.entity
+    if not DoesEntityExist(petPed) or IsEntityDead(petPed) then return end
 
     -- If pet is already in a vehicle, eject it
     if IsPedInAnyVehicle(petPed, false) then
@@ -289,13 +304,20 @@ end
 -- ============================
 
 function goThere(ped)
+    if not DoesEntityExist(ped) or IsEntityDead(ped) then return end
     local activePed = ActivePed:read()
     local hash = activePed and activePed.item and activePed.item.metadata and activePed.item.metadata.hash
     while true do
+        if not DoesEntityExist(ped) or IsEntityDead(ped) then return end
+        -- Cancel with Backspace
+        if IsControlJustPressed(0, 194) then
+            if hash then SetBusy(hash, false) end
+            return
+        end
         local color = { r = 2, g = 241, b = 181, a = 200 }
         local position = GetEntityCoords(PlayerPedId())
         local coords = RayCastGamePlayCamera(1000.0)
-        Draw2DText('Press ~g~E~w~ To go there', 4, { 255, 255, 255 }, 0.4, 0.43, 0.913)
+        Draw2DText('Press ~g~E~w~ To go there  ~r~Backspace~w~ Cancel', 4, { 255, 255, 255 }, 0.4, 0.43, 0.913)
         if IsControlJustReleased(0, 38) then
             if hash then SetBusy(hash, true) end
             TaskGoToCoordAnyMeans(ped, coords, 10.0, 0, 0, 0, 0)
@@ -334,6 +356,8 @@ end
 
 function AttackTargetedPed(attackerPed, targetPed)
     if not attackerPed or not targetPed then return false end
+    if not DoesEntityExist(attackerPed) or not DoesEntityExist(targetPed) then return false end
+    if IsEntityDead(attackerPed) then return false end
 
     -- Let the combat AI react to target movement/fleeing
     SetBlockingOfNonTemporaryEvents(attackerPed, false)
@@ -364,20 +388,26 @@ function AttackTargetedPed(attackerPed, targetPed)
     end
 
     -- Restore passive companion state
-    SetBlockingOfNonTemporaryEvents(attackerPed, true)
-    SetCanAttackFriendly(attackerPed, false, false)
-    SetPedRelationshipGroupHash(attackerPed, petGroupHash)
-    TaskFollowTargetedPlayer(attackerPed, PlayerPedId(), 3.0, false)
+    if DoesEntityExist(attackerPed) and not IsEntityDead(attackerPed) then
+        SetBlockingOfNonTemporaryEvents(attackerPed, true)
+        SetCanAttackFriendly(attackerPed, false, false)
+        SetPedRelationshipGroupHash(attackerPed, petGroupHash)
+        TaskFollowTargetedPlayer(attackerPed, PlayerPedId(), 1.5, true)
+    end
 end
 
 function attackLogic(alreadyHunting)
     while true do
         Wait(0)
+        local activePed = ActivePed:read()
+        if not activePed or not DoesEntityExist(activePed.entity) or IsEntityDead(activePed.entity) then return false end
+        -- Cancel with Backspace
+        if IsControlJustPressed(0, 194) then return false end
         local color = { r = 2, g = 241, b = 181, a = 200 }
         local plyped = PlayerPedId()
         local position = GetEntityCoords(plyped)
         local coords, entity = RayCastGamePlayCamera(1000.0)
-        Draw2DText('PRESS ~g~E~w~ TO ATTACK TARGET', 4, { 255, 255, 255 }, 0.4, 0.43, 0.913)
+        Draw2DText('PRESS ~g~E~w~ TO ATTACK TARGET  ~r~Backspace~w~ Cancel', 4, { 255, 255, 255 }, 0.4, 0.43, 0.913)
 
         if IsControlJustReleased(0, 38) then
             local activePed = ActivePed:read()
@@ -394,7 +424,7 @@ function attackLogic(alreadyHunting)
             AttackTargetedPed(pet, entity)
             alreadyHunting.state = true
 
-            while not IsPedDeadOrDying(entity) do
+            while DoesEntityExist(entity) and not IsPedDeadOrDying(entity) and DoesEntityExist(pet) and not IsEntityDead(pet) do
                 Wait(5)
                 local pedCoord = GetEntityCoords(entity)
                 local petCoord = GetEntityCoords(pet)
@@ -504,6 +534,7 @@ function TrackerScan(activePed)
     if not specCfg then return end
 
     local petEntity = activePed.entity
+    if not DoesEntityExist(petEntity) or IsEntityDead(petEntity) then return end
     local petPos = GetEntityCoords(petEntity)
     local radius = specCfg.trackRadius
     local duration = specCfg.markerDuration
@@ -588,6 +619,7 @@ end
 function SearchLogic(_, activePed)
     local job = QBX.PlayerData.job
     if not job then return end
+    if not DoesEntityExist(activePed.entity) or IsEntityDead(activePed.entity) then return end
 
     if not isK9Job() then
         lib.notify({ description = 'You are not allowed to do this action', type = 'error', duration = 7000 })
@@ -655,6 +687,7 @@ local searchOffsets = {
 }
 
 function k9SearchVehicle(veh, activePed)
+    if not DoesEntityExist(activePed.entity) or IsEntityDead(activePed.entity) then return end
     if not activePed.petConfig or not activePed.petConfig.isK9 then
         lib.notify({ description = 'This pet can not do that!', type = 'error', duration = 7000 })
         return
@@ -672,13 +705,16 @@ function k9SearchVehicle(veh, activePed)
     end
 
     for key, value in pairs(searchOffsets) do
+        if not DoesEntityExist(activePed.entity) or IsEntityDead(activePed.entity) then break end
         local vehHead = GetEntityHeading(veh)
         local plate = GetVehicleNumberPlateText(veh)
         local pos = GetOffsetFromEntityInWorldCoords(veh, value.offset.x, value.offset.y, value.offset.z)
         TaskFollowNavMeshToCoord(activePed.entity, pos.x, pos.y, pos.z, 3.0, -1, 0.0, 1, 0)
         Wait(4000)
+        if not DoesEntityExist(activePed.entity) or IsEntityDead(activePed.entity) then break end
         TaskAchieveHeading(activePed.entity, vehHead + value.offset.w, -1)
         Wait(2000)
+        if not DoesEntityExist(activePed.entity) or IsEntityDead(activePed.entity) then break end
 
         local result = lib.callback.await('murderface-pets:server:searchVehicle', false, { key = key, plate = plate })
         if result then
@@ -698,5 +734,117 @@ function k9SearchVehicle(veh, activePed)
     if DoesEntityExist(activePed.entity) and not IsEntityDead(activePed.entity) then
         Wait(1000)
         TaskFollowTargetedPlayer(activePed.entity, PlayerPedId(), 3.0, true)
+    end
+end
+
+-- ============================
+--    Pet Carry System
+-- ============================
+
+local carryingHash = nil -- hash of pet currently being carried
+
+--- Check if player is carrying a pet
+---@param hash? string Optional — check specific pet
+---@return boolean
+function IsCarrying(hash)
+    if hash then return carryingHash == hash end
+    return carryingHash ~= nil
+end
+
+--- Pick up a pet and carry it
+---@param activePed table ActivePed data
+function CarryPet(activePed)
+    if not Config.carry or not Config.carry.enabled then return end
+    if not DoesEntityExist(activePed.entity) or IsEntityDead(activePed.entity) then return end
+
+    local hash = activePed.item.metadata.hash
+    local petEntity = activePed.entity
+    local playerPed = PlayerPedId()
+
+    if carryingHash then
+        DropPet(carryingHash)
+        return
+    end
+
+    -- Size check
+    local petCfg = activePed.petConfig
+    local size = petCfg and petCfg.size or 'large'
+    local allowed = false
+    for _, s in ipairs(Config.carry.allowedSizes) do
+        if size == s then allowed = true; break end
+    end
+    if not allowed then
+        lib.notify({ description = 'This pet is too large to carry', type = 'error', duration = 5000 })
+        return
+    end
+
+    -- Proximity check
+    local dist = #(GetEntityCoords(playerPed) - GetEntityCoords(petEntity))
+    if dist > 3.0 then
+        lib.notify({ description = 'Get closer to your pet', type = 'error', duration = 5000 })
+        return
+    end
+
+    -- Stop any current pet behavior
+    ClearPedTasks(petEntity)
+    DetachLeash(hash)
+    SetWaiting(hash, false)
+    SetBusy(hash, true)
+
+    -- Player carry animation (upper body, looping)
+    lib.requestAnimDict('anim@heists@box_carry@')
+    TaskPlayAnim(playerPed, 'anim@heists@box_carry@', 'idle', 8.0, -8.0, -1, 49, 0, false, false, false)
+
+    -- Attach pet to player spine
+    local bone = GetPedBoneIndex(playerPed, Config.carry.playerBone)
+    local off = Config.carry.offset
+    local rot = Config.carry.rotation
+
+    AttachEntityToEntity(
+        petEntity, playerPed, bone,
+        off.x, off.y, off.z,
+        rot.x, rot.y, rot.z,
+        true, true, false, true, 0, true
+    )
+
+    -- Pet sits while carried
+    if activePed.animClass then
+        Anims.play(petEntity, activePed.animClass, 'sit')
+    end
+
+    carryingHash = hash
+    lib.notify({ description = 'Carrying ' .. (activePed.item.metadata.name or 'pet'), type = 'success', duration = 3000 })
+end
+
+--- Put down a carried pet
+---@param hash string Pet hash
+function DropPet(hash)
+    if carryingHash ~= hash then return end
+
+    local petData = ActivePed:findByHash(hash)
+    local playerPed = PlayerPedId()
+
+    -- Stop carry animation
+    ClearPedTasks(playerPed)
+
+    if petData and DoesEntityExist(petData.entity) then
+        -- Detach and place on ground near player
+        DetachEntity(petData.entity, true, true)
+        local dropPos = GetOffsetFromEntityInWorldCoords(playerPed, 0.0, 1.5, -0.5)
+        SetEntityCoords(petData.entity, dropPos.x, dropPos.y, dropPos.z, false, false, false, false)
+        Wait(100)
+        ClearPedTasks(petData.entity)
+        PlaceObjectOnGroundProperly(petData.entity)
+        TaskFollowTargetedPlayer(petData.entity, playerPed, 3.0, true)
+    end
+
+    SetBusy(hash, false)
+    carryingHash = nil
+end
+
+--- Drop pet if carrying (called from vehicle/combat/death hooks)
+function DropCarriedPet()
+    if carryingHash then
+        DropPet(carryingHash)
     end
 end

@@ -1,440 +1,146 @@
 # murderface-pets
 
-**A free, open-source pet companion system for FiveM — built on the Qbox/ox stack.**
+A natural companion pet system for FiveM (QBox/QBX framework). Pets act like real pets — they follow you, defend you, react to their environment, and interact with other pets, all without constant menu management.
 
-Most pet scripts on Tebex charge $15–$30 for a fraction of what this does. murderface-pets gives you 16 vanilla GTA V animals, a full XP and progression system, K9 police functionality, hunting, guard mode, specializations, stray taming, breeding, and more — all config-driven, all free.
+## Features
 
-## Why This Script
+### Natural Companion AI
+- **Auto-idle**: Pet sits when you stop, wanders and sniffs around, plays random anims, then cycles back
+- **Speed-matching follow**: Pets walk when you walk, jog when you jog, sprint when you sprint
+- **Sprint ahead**: Dog runs out in front when you sprint, falls back behind when you slow down
+- **Move rate override**: Physically faster movement (1.0x idle to 1.8x catch-up) via `SetPedMoveRateOverride`
+- **Auto-defend**: Pet attacks anyone who hurts you — no toggle needed, scales by level
+- **Gunshot reactions**: Small pets cower, large pets bark and go alert
+- **Ambient vocalizations**: Random barks, whines, and mood changes while following
+- **Stranger alert**: Barks at NPCs who get too close
+- **Sprint excitement**: Barks happily when you start running
+- **Water reactions**: Excited bark entering water, shake off leaving
 
-- **Zero performance overhead** — no per-frame loops, no streaming assets. Stat updates tick every 10 seconds. Client-to-server sync is event-driven, not polled.
-- **Drop-in install** — one SQL file, paste item defs into ox_inventory, copy images, `ensure`. Five minutes and you're live.
-- **Everything is config-driven** — XP rates, level gates, food/thirst drain, K9 illegal items, shop prices, pet stats. Tune your server without touching Lua.
-- **Built on the modern stack** — qbx_core, ox_lib, ox_inventory, ox_target, oxmysql. No legacy QB dependencies, no spaghetti wrappers.
-- **Database-backed persistence** — pet metadata lives in ox_inventory items and is automatically backed up to MySQL every save tick. Admin restore command included.
+### Multi-Pet Support
+- Up to 2 active pets simultaneously
+- Lateral spacing — pets walk side by side, not stacked
+- Sibling interactions — your own pets sniff and bark at each other during idle
+- Independent follow offsets (left/right of player)
 
-## Features at a Glance
+### 26 Breeds
+8 large dogs, 3 small dogs, 2 cats, 3 wild/exotic, 2 small animals, 2 primates, plus 10 addon breeds (requires addon ped streaming resource). Police K9 available for law enforcement jobs.
 
-### 16 Vanilla Companions
-Dogs, cats, big cats, primates, and small animals — each with per-model health, pricing, animations, and trait flags. All use vanilla GTA V models, no streaming required.
+### XP & Progression (Levels 0-50)
+- 10 XP sources: passive, hunting, petting, tricks, feeding, watering, K9 search, healing, guarding, tracking, defending
+- Level-gated unlocks: hunting (3), guard mode (5), speed tiers (10/25), specializations (20)
+- 5 level titles: Puppy, Trained, Veteran, Elite, Legendary
+- Milestone celebrations at levels 10, 25, 50
 
-| Category | Animals | Highlights |
-|----------|---------|------------|
-| Large Dogs | Husky, German Shepherd, Rottweiler, Retriever, Chop | Tricks, petting, hunting |
-| Small Dogs | Westie, Pug, Poodle | Tricks, petting |
-| Cats | House Cat | Petting animations |
-| Wild | Black Panther, Mountain Lion, Coyote | Hunting predators |
-| Small Animals | Chicken, Rabbit | Idle companions |
-| Primates | Chimpanzee, Rhesus Monkey | Build 3258+ |
+### 3 Specializations (Level 20)
+- **Guardian**: 1.5x guard radius, +50 combat ability
+- **Tracker**: Detect and highlight nearby peds within 50m
+- **Companion**: 2x stress relief, 2x regen, 1.25x XP
 
-### XP & Progression System
-Pets level up from 0 to 50 through **7 active XP sources** and passive XP ticks. Progression unlocks new abilities as your pet grows.
+### Combat Systems
+- **Guard mode**: Pet guards a position and attacks intruders
+- **Aggro/defense**: Auto-attacks threats to owner (always-on for dogs/wild)
+- **Hunting**: Hunt and Hunt & Grab with corpse carry
+- **K9 search**: Person and vehicle search for illegal items (police jobs)
 
-| XP Source | Amount | Cooldown |
-|-----------|--------|----------|
-| Passive (while spawned) | 10/tick (scales down) | Every 10s |
-| Hunt kill | 50 | 30s |
-| K9 search | 40 | 30s |
-| Feeding | 20 | — |
-| Petting | 15 | 60s |
-| Watering | 15 | — |
-| Trick performance | 10 | 15s |
-| Healing | 10 | — |
+### Prop-Based Leash System
+- 3 color variants (Black, Yellow, Green)
+- Physical leash prop attached between player hand and pet neck
+- Script-side distance enforcement
+- Network synced — other players see the leash
+- Auto-detaches on despawn, death, vehicle enter
 
-**Level-gated unlocks:**
-- Level 5 — Hunting
-- Level 5/10/20 — Trick tiers (beg, paw, play dead)
-- Level 10 — K9 police searches
-- Level 15/30 — Faster follow speed
-- Level 25 — Passive health regeneration
+### Pet Carry
+- Pick up small/medium pets with carry animation
+- Auto-drops on vehicle enter, combat, logout
 
-**Rank titles:** Puppy → Trained → Veteran → Elite → Legendary
+### 10 Emotes (`/petemote`)
+happy, angry, sad, bark, sit, sleep, dance, paw, lay, fetch (throws a ball!)
 
-Real-time XP display in the View Stats panel — no need to despawn/respawn to check progress. Milestone celebrations at levels 10, 25, and 50 with notifications and pet vocalizations.
+### Stray Taming
+- Wild animals at config-driven spawn points
+- Trust-building through feeding (persisted in DB)
+- Rare coat variants on tamed strays
 
-### Full Interaction System
-- **Command menu** (default: `O` key) — follow, wait, sit, tricks, hunt, go there, get in car
-- **ox_target interactions** — pet, view stats, heal, revive, give water
-- **Petting animations** — player and pet play synced animations, awards XP, relieves stress (configurable HUD integration)
-- **Tricks** — sit, beg, shake paw, play dead (level-gated, per-trick unlock)
-- **Auto vehicle enter/exit** — all pets hop in when you get in a car, hop out when you leave (seats permitting)
-- **Auto-follow** — pets default to following their owner and automatically resume following after completing any task or trick
-- **Guard mode** — pet holds position and attacks intruding NPCs (optionally players), owner gets notified
-- **Pet name overhead** — 3D floating name and level title above each active pet
-- **Pet emotes** — `/petemote` command with moods, vocalizations, and animations
+### Breeding & Doghouse
+- Placeable doghouse prop with rest bonus aura
+- Same-model, opposite-gender, level 10+ breeding
+- 24h cooldown per parent, offspring metadata pre-generated
 
-### Hunting System
-Dogs and wild cats can hunt local wildlife. Level-gated at level 5. Pets chase, attack, and return with the kill. Awards XP on successful hunts.
+### Built-In Pet Shop (`/petshop`)
+- Admin places display dogs at kennel locations in-game
+- Players walk up and buy via ox_target
+- DB-persisted, proximity-spawned display dogs
+- Works standalone — no dependency on external shop resources
 
-### K9 Police System
-K9-eligible breeds (German Shepherd, Rottweiler) can be used by officers to:
-- **Search players** for contraband (configurable illegal item list)
-- **Search vehicles** for drugs and paraphernalia
+### Swimming
+- Pets swim instead of drowning (`SetPedDiesInWater` + config flag 65)
 
-Requires a configurable job (default: `police`) and level 10+.
-
-### Guard Mode
-Set your pet to guard a location. The pet holds position and attacks any NPC (optionally player peds) that enters the configurable guard radius. The owner receives a notification when intruders are detected. Recall the pet to resume following.
-
-- Level 10+ required, dogs and wild species only
-- Combat attributes fully configurable (ability, range, movement)
-- Can't hunt while guarding
-- Auto-stops on pet death, despawn, or logout
-
-### Specialization System
-At level 20, pets unlock a permanent one-time specialization choice:
-
-| Specialization | Effect |
-|----------------|--------|
-| **Guardian** | 1.5x guard radius, +50 combat ability |
-| **Tracker** | "Track Nearby" action detects peds within 50m, draws markers for 10s |
-| **Companion** | 2x stress relief, 2x health regen, 1.25x XP gain |
-
-Choice is confirmed with a dialog ("This is permanent!"), stored in metadata, and displayed in View Stats.
-
-### Stray/Wild Pet Taming
-Config-driven stray animal spawn points in the world. Players feed strays repeatedly to build trust (stored in MySQL). At full trust, the stray converts into a pet item — some with rare coat variants only obtainable through taming.
-
-- 3 initial stray locations (Sandy Shores, Paleto Bay, City) — add more in config
-- Feed cooldown prevents spam (default 5 minutes between feeds per stray)
-- Proximity-based spawning (100m in / 150m out) keeps entity count low
-- Spawn chance roll + respawn timer after taming (default 1 hour)
-
-### Breeding System
-Players buy a Dog House from the supply shop, place it as a prop in the world, and breed matching pets at it.
-
-- **Same-model breeding** — Husky + Husky, not Husky + Rottweiler
-- **Requires** opposite gender, both level 10+, 24-hour real-time cooldown per parent
-- **Gestation = next server restart** — offspring status promoted from pending to ready on resource start
-- **Offspring** get a random name, gender, and coat variation; level 0, fresh stats, parent lineage tracked
-- **Dog house rest bonus** — pets within 15m get 50% less food/thirst drain + bonus HP regen
-- **Placeable prop** — interactive placement with ghost preview, rotation controls, ground snapping
-- 1 dog house per player, persisted in MySQL, pick up to relocate
-
-### Care System
-- **Hunger** drains over time — feed with pet food items
-- **Thirst** builds over time — fill and use water bottles (refillable)
-- **Health** drains when starving or dehydrated — heal with first aid kits
-- **Death & revival** — pets can die and be revived with first aid (ox_target)
-- **Health regeneration** — level 25+ pets slowly regenerate HP
-
-### Customization & Economy
-- **Pet shop NPC** with configurable location and pricing
-- **Supply shop NPC** with food, water bottles, first aid, collars, nametags, grooming kits
-- **Grooming** — change your pet's coat/variation with a grooming kit
-- **Renaming** — rename your pet with a nametag item (profanity filter included)
-- **Ownership transfer** — give your pet to another player with a collar item
+### Smart Vehicle Handling
+- Auto-board when owner enters vehicle
+- Auto-exit to left side with ground detection when owner exits
+- Skip invisible vehicles (skateboard BMX fix)
+- Dead pets don't board
 
 ## Dependencies
 
-| Resource | Link |
-|----------|------|
-| qbx_core | [Qbox-project/qbx_core](https://github.com/Qbox-project/qbx_core) |
-| ox_lib | [overextended/ox_lib](https://github.com/overextended/ox_lib) |
-| ox_inventory | [overextended/ox_inventory](https://github.com/overextended/ox_inventory) |
-| ox_target | [overextended/ox_target](https://github.com/overextended/ox_target) |
-| oxmysql | [overextended/oxmysql](https://github.com/overextended/oxmysql) |
+- [qbx_core](https://github.com/Qbox-project/qbx_core) (QBox framework)
+- [ox_lib](https://github.com/overextended/ox_lib)
+- [ox_target](https://github.com/overextended/ox_target)
+- [ox_inventory](https://github.com/overextended/ox_inventory)
+- [oxmysql](https://github.com/overextended/oxmysql)
+
+### Optional
+- Addon ped streaming resource for extra breeds (Doberman, Cane Corso, English Bulldog, Sphynx Cat, etc.)
+- Police K9 ped streaming resource for the Police K9 breed
 
 ## Installation
 
-### 1. Database
+1. Place `murderface-pets` in your resources folder
+2. Add `ensure murderface-pets` to your server.cfg (after ox dependencies)
+3. Add pet items to your ox_inventory `items.lua` (see item definitions below)
+4. Add ace permission for admin commands:
+   ```
+   add_ace group.admin murderface-pets.petshop allow
+   ```
+5. Restart server — DB tables auto-create on first start
 
-Run the SQL file against your database **before** starting the resource:
+## Database Tables (auto-created)
 
-```sql
-source sql/install.sql
-```
-
-Or paste the contents of `sql/install.sql` into your database manager. This creates the `murderface_pets` backup table.
-
-### 2. Add items to ox_inventory
-
-Open `ox_inventory/data/items.lua` and paste the following block inside the `return { }` table. Pet items use `stack = false` because each pet carries unique metadata (name, level, XP, health, coat, etc). Supply items stack normally.
-
-```lua
-	-- ========================================
-	--  murderface-pets: Pet Items
-	--  consume = 0: usable but not consumed on use
-	--  server.export: links to murderface-pets resource handler
-	-- ========================================
-
-	['murderface_husky'] = {
-		label = 'Husky',
-		weight = 100,
-		stack = false,
-		consume = 0,
-		description = 'A loyal Husky companion',
-		server = { export = 'murderface-pets.murderface_husky' },
-	},
-
-	['murderface_shepherd'] = {
-		label = 'German Shepherd',
-		weight = 100,
-		stack = false,
-		consume = 0,
-		description = 'A brave German Shepherd companion',
-		server = { export = 'murderface-pets.murderface_shepherd' },
-	},
-
-	['murderface_rottweiler'] = {
-		label = 'Rottweiler',
-		weight = 100,
-		stack = false,
-		consume = 0,
-		description = 'A powerful Rottweiler companion',
-		server = { export = 'murderface-pets.murderface_rottweiler' },
-	},
-
-	['murderface_retriever'] = {
-		label = 'Golden Retriever',
-		weight = 100,
-		stack = false,
-		consume = 0,
-		description = 'A friendly Golden Retriever companion',
-		server = { export = 'murderface-pets.murderface_retriever' },
-	},
-
-	['murderface_chop'] = {
-		label = 'Chop',
-		weight = 100,
-		stack = false,
-		consume = 0,
-		description = 'A tough old dog with character',
-		server = { export = 'murderface-pets.murderface_chop' },
-	},
-
-	['murderface_westy'] = {
-		label = 'Westie',
-		weight = 100,
-		stack = false,
-		consume = 0,
-		description = 'A spirited West Highland Terrier companion',
-		server = { export = 'murderface-pets.murderface_westy' },
-	},
-
-	['murderface_pug'] = {
-		label = 'Pug',
-		weight = 100,
-		stack = false,
-		consume = 0,
-		description = 'An adorable Pug companion',
-		server = { export = 'murderface-pets.murderface_pug' },
-	},
-
-	['murderface_poodle'] = {
-		label = 'Poodle',
-		weight = 100,
-		stack = false,
-		consume = 0,
-		description = 'An elegant Poodle companion',
-		server = { export = 'murderface-pets.murderface_poodle' },
-	},
-
-	['murderface_cat'] = {
-		label = 'House Cat',
-		weight = 100,
-		stack = false,
-		consume = 0,
-		description = 'An independent feline companion',
-		server = { export = 'murderface-pets.murderface_cat' },
-	},
-
-	['murderface_panther'] = {
-		label = 'Black Panther',
-		weight = 100,
-		stack = false,
-		consume = 0,
-		description = 'A sleek and dangerous Black Panther',
-		server = { export = 'murderface-pets.murderface_panther' },
-	},
-
-	['murderface_mtlion'] = {
-		label = 'Mountain Lion',
-		weight = 100,
-		stack = false,
-		consume = 0,
-		description = 'A fierce Mountain Lion companion',
-		server = { export = 'murderface-pets.murderface_mtlion' },
-	},
-
-	['murderface_coyote'] = {
-		label = 'Coyote',
-		weight = 100,
-		stack = false,
-		consume = 0,
-		description = 'A cunning Coyote companion',
-		server = { export = 'murderface-pets.murderface_coyote' },
-	},
-
-	['murderface_hen'] = {
-		label = 'Chicken',
-		weight = 100,
-		stack = false,
-		consume = 0,
-		description = 'A trusty Chicken companion',
-		server = { export = 'murderface-pets.murderface_hen' },
-	},
-
-	['murderface_rabbit'] = {
-		label = 'Rabbit',
-		weight = 100,
-		stack = false,
-		consume = 0,
-		description = 'A fluffy Rabbit companion',
-		server = { export = 'murderface-pets.murderface_rabbit' },
-	},
-
-	['murderface_chimp'] = {
-		label = 'Chimpanzee',
-		weight = 100,
-		stack = false,
-		consume = 0,
-		description = 'A clever Chimpanzee companion (build 3258+)',
-		server = { export = 'murderface-pets.murderface_chimp' },
-	},
-
-	['murderface_rhesus'] = {
-		label = 'Rhesus Monkey',
-		weight = 100,
-		stack = false,
-		consume = 0,
-		description = 'A mischievous Rhesus Monkey companion (build 3258+)',
-		server = { export = 'murderface-pets.murderface_rhesus' },
-	},
-
-	-- ========================================
-	--  murderface-pets: Supply Items
-	--  consume = 0: usable but not consumed (resource handles removal)
-	-- ========================================
-
-	['murderface_food'] = {
-		label = 'Pet Food',
-		weight = 200,
-		consume = 0,
-		description = 'Nutritious food for your pet',
-		server = { export = 'murderface-pets.murderface_food' },
-	},
-
-	['murderface_firstaid'] = {
-		label = 'Pet First Aid',
-		weight = 300,
-		consume = 0,
-		description = 'Heals or revives your pet (use via 3rd eye)',
-		server = { export = 'murderface-pets.murderface_firstaid' },
-	},
-
-	['murderface_waterbottle'] = {
-		label = 'Water Bottle',
-		weight = 500,
-		consume = 0,
-		description = 'Refillable water bottle for your pet',
-		server = { export = 'murderface-pets.murderface_waterbottle' },
-	},
-
-	['murderface_collar'] = {
-		label = 'Pet Collar',
-		weight = 100,
-		consume = 0,
-		description = 'Transfer pet ownership to another player',
-		server = { export = 'murderface-pets.murderface_collar' },
-	},
-
-	['murderface_nametag'] = {
-		label = 'Pet Nametag',
-		weight = 50,
-		consume = 0,
-		description = 'Rename your pet companion',
-		server = { export = 'murderface-pets.murderface_nametag' },
-	},
-
-	['murderface_groomingkit'] = {
-		label = 'Grooming Kit',
-		weight = 400,
-		consume = 0,
-		description = 'Change your pet\'s coat and appearance',
-		server = { export = 'murderface-pets.murderface_groomingkit' },
-	},
-
-	['murderface_doghouse'] = {
-		label = 'Dog House',
-		weight = 5000,
-		consume = 0,
-		description = 'A placeable dog house for pet breeding and resting',
-		server = { export = 'murderface-pets.murderface_doghouse' },
-	},
-```
-
-### 3. Inventory images
-
-Copy all `.png` files from the `inventory_images/` folder into your ox_inventory web images directory (typically `ox_inventory/web/images/`). All 23 images (16 pets + 7 supplies) are included.
-
-### 4. Start the resource
-
-Add to your `server.cfg`:
-
-```
-ensure murderface-pets
-```
-
-Make sure it starts **after** all dependencies (qbx_core, ox_lib, ox_inventory, ox_target, oxmysql).
-
-### 5. Game build requirement
-
-The chimpanzee (`a_c_chimp_02`) and rhesus monkey (`a_c_rhesus`) models require **build 3258+**. If your server runs a lower build, remove those two entries from `Config.pets` in `config.lua`.
+- `murderface_pets` — pet data backup
+- `murderface_stray_trust` — stray taming progress
+- `murderface_doghouses` — placed doghouse positions
+- `murderface_breeding` — breeding records
+- `murderface_petshop_displays` — admin-placed shop display dogs
 
 ## Configuration
 
-All settings are in `config.lua` with inline comments. Everything is tunable without touching any other file.
+All settings are in `config.lua`:
+- Pet definitions, prices, and traits
+- XP rates and progression gates
+- Guard, aggro, and combat settings
+- Ambient behavior tuning (vocalize chance, idle thresholds, reactions)
+- Movement rate multipliers
+- Leash settings
+- Pet carry settings
+- K9 illegal items list
+- Stray spawn points
+- Breeding rules
+- Notification system (ox_lib or rtx_notify)
 
-| Section | What it controls |
-|---------|-----------------|
-| `Config.maxActivePets` | Max simultaneously spawned pets (default: 2) |
-| `Config.petMenuKeybind` | Key to open companion menu (default: `O`) |
-| `Config.xp` | Per-action XP awards for all 7 sources |
-| `Config.activityCooldowns` | Seconds between repeat XP awards per activity |
-| `Config.progression` | Level gates, follow speed tiers, milestones, health regen |
-| `Config.trickLevels` | Per-trick unlock levels |
-| `Config.levelTitles` | Rank title thresholds |
-| `Config.balance` | Food/thirst drain rates, AFK timers |
-| `Config.items` | Item names, durations, heal percentages |
-| `Config.k9` | Eligible jobs, illegal item list for searches |
-| `Config.petShop` | Shop NPC model, coords, blip settings |
-| `Config.suppliesShop` | Supply shop NPC model, coords, blip settings |
-| `Config.stressRelief` | Stress reduction from petting (for HUD scripts) |
-| `Config.guard` | Guard radius, check interval, player targeting, species |
-| `Config.specializations` | Guardian/Tracker/Companion multipliers and thresholds |
-| `Config.strays` | Stray spawn points, trust threshold, feed cooldown, rare coats |
-| `Config.breeding` | Breed level, cooldown, rest bonus, placement distance, species |
-| `Config.nameTag` | Overhead pet name display settings |
-| `Config.petEmotes` | Emote definitions for `/petemote` command |
-| `Config.blip` | Map blip settings for active pets |
+## Commands
 
-## File Structure
+| Command | Permission | Description |
+|---------|-----------|-------------|
+| `/petemote <name>` | Everyone | Play a pet emote |
+| `/petshop` | Admin | Open breed picker, place display dogs |
+| `/petshop remove` | Admin | Remove nearest display dog |
 
-```
-murderface-pets/
-├── fxmanifest.lua
-├── config.lua
-├── sql/
-│   └── install.sql
-├── locales/
-│   └── en.lua
-├── shared/
-│   ├── animations.lua      -- Animation data by animal class
-│   ├── variations.lua      -- Coat/texture variations per model
-│   └── namevalidation.lua  -- Pet name filter
-├── server/
-│   ├── functions.lua       -- XP, cooldowns, pet init helpers
-│   └── server.lua          -- Pet class, events, callbacks, DB layer
-├── client/
-│   ├── functions.lua       -- Spawn helpers, attack/hunt/K9/tracker logic
-│   ├── client.lua          -- ActivePed tracking, core interactions
-│   ├── guard.lua           -- Guard mode enforcement + combat
-│   ├── strays.lua          -- Stray taming proximity spawning
-│   ├── doghouse.lua        -- Placeable dog house + breeding menu
-│   └── menu.lua            -- Context menus (ox_lib)
-└── inventory_images/       -- Item icons for ox_inventory
-```
+## Keybind
+
+| Key | Action |
+|-----|--------|
+| `]` (RBRACKET) | Open pet companion menu |
 
 ## License
 
-This project is licensed under the [GNU General Public License v3.0](LICENSE). You are free to use, modify, and distribute this software under the terms of the GPL-3.0. See the [LICENSE](LICENSE) file for details.
+MIT

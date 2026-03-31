@@ -212,6 +212,42 @@ local menu = {
         end,
     },
     {
+        label = 'Carry Pet',
+        TYPE = 'CarryPet',
+        icon = 'hands-holding',
+        iconColor = '#e8590c',
+        description = 'Pick up or put down your pet',
+        show = function(activePed)
+            if not Config.carry or not Config.carry.enabled then return false end
+            if IsGuarding(activePed.item.metadata.hash) then return false end
+            local size = activePed.petConfig and activePed.petConfig.size or 'large'
+            for _, s in ipairs(Config.carry.allowedSizes) do
+                if size == s then return true end
+            end
+            return false
+        end,
+        action = function(_, activePed)
+            CarryPet(activePed)
+            return true
+        end,
+    },
+    {
+        label = 'Toggle Leash',
+        TYPE = 'ToggleLeash',
+        icon = 'link',
+        iconColor = '#495057',
+        description = 'Attach or remove the leash',
+        show = function(activePed)
+            if not Config.leash or not Config.leash.enabled then return false end
+            local hash = activePed.item.metadata.hash
+            return not IsGuarding(hash)
+        end,
+        action = function(_, activePed)
+            ToggleLeash(activePed)
+            return true
+        end,
+    },
+    {
         label = Lang:t('menu.action_menu.get_in_car'),
         TYPE = 'GetinCar',
         icon = 'car-side',

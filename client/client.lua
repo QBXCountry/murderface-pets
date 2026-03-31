@@ -48,6 +48,17 @@ function ActivePed:remove(hash)
     StopAggro(hash)
     SetWaiting(hash, false)
     SetBusy(hash, false)
+    petSlotIndex[hash] = nil
+    -- Clean up all per-pet state tables (prevent memory leaks)
+    followCooldowns[hash] = nil
+    lastFollowSpeed[hash] = nil
+    lastFollowSpeed[hash .. '_offset'] = nil
+    idleTimers[hash] = nil
+    idleState[hash] = nil
+    lastVocalize[hash] = nil
+    lastWaterReact[hash] = nil
+    petWaterState[hash] = nil
+    reviveFlags[hash] = nil
 
     if DoesEntityExist(petData.entity) then
         local netId = NetworkGetNetworkIdFromEntity(petData.entity)
@@ -237,6 +248,12 @@ RegisterNetEvent('murderface-pets:client:spawnPet', function(modelName, hostileT
         SetBlockingOfNonTemporaryEvents(ped, true)
         SetPedFleeAttributes(ped, 0, 0)
         SetPedRelationshipGroupHash(ped, GetHashKey('MFPETS_COMPANION'))
+
+        -- Damage resistance: no headshot instakills, heavily reduced incoming damage
+        SetPedSuffersCriticalHits(ped, false)
+        SetPedCanRagdollFromPlayerImpact(ped, false)
+        SetPedDiesInWater(ped, false)
+        SetPedConfigFlag(ped, 65, false) -- CPED_CONFIG_FLAG_DiesInstantlyInWater
 
         -- Register on server (non-blocking)
         lib.callback('murderface-pets:server:registerPet', false, function() end, {
@@ -486,48 +503,364 @@ RegisterNetEvent('murderface-pets:client:updateHealth', function(hash, amount)
 end)
 
 -- ============================
+--     Revive Pet In-Place
+-- ============================
+-- Resurrects the pet entity on the ground instead of despawning.
+-- Breaks the death loop by setting a revive flag the loop checks.
+
+local reviveFlags = {} -- { [hash] = true }
+
+RegisterNetEvent('murderface-pets:client:revivePet', function(hash, newHealth)
+    local petData = ActivePed:findByHash(hash)
+    if not petData then return end
+
+    local ped = petData.entity
+    if not DoesEntityExist(ped) then return end
+
+    -- Signal the death loop to stop
+    reviveFlags[hash] = true
+
+    -- Resurrect the ped using native resurrection
+    local pos = GetEntityCoords(ped)
+    ResurrectPed(ped)
+    SetEntityCoords(ped, pos.x, pos.y, pos.z, false, false, false, false)
+    SetEntityHealth(ped, math.floor(newHealth))
+    ClearPedTasks(ped)
+
+    -- Restore companion state
+    SetBlockingOfNonTemporaryEvents(ped, true)
+    SetPedFleeAttributes(ped, 0, 0)
+    SetPedRelationshipGroupHash(ped, GetHashKey('MFPETS_COMPANION'))
+    SetPedSuffersCriticalHits(ped, false)
+    SetPedCanRagdollFromPlayerImpact(ped, false)
+
+    -- Update client data
+    petData.health = newHealth
+    petData.item.metadata.health = newHealth
+
+    -- Resume following owner
+    Wait(500)
+    local plyPed = PlayerPedId()
+    TaskFollowTargetedPlayer(ped, plyPed, 1.5, true)
+
+    -- Restart the pet thread (the old one exited when pet died)
+    createActivePetThread(ped, petData.item)
+
+    lib.notify({ description = (petData.item.metadata.name or 'Pet') .. ' has been revived!', type = 'success', duration = 5000 })
+end)
+
+-- ============================
 --     AFK Wandering
 -- ============================
 
-local function afkWandering(timeOut, plyPed, ped, animClass, hash)
-    -- Only run idle animations for pets explicitly told to Wait
-    if not IsWaiting(hash) then
-        timeOut[1] = 0
-        return
+-- ============================
+--   Natural Companion System
+-- ============================
+-- Pets act like pets: they idle naturally, defend you automatically,
+-- react to the environment, vocalize, and match your pace.
+-- No menus or toggles needed for basic companion behavior.
+
+local followCooldowns = {}      -- { [hash] = gameTimer }
+local lastFollowSpeed = {}      -- { [hash] = speed } track to avoid re-issuing same task
+local petSlotIndex = {}         -- { [hash] = 1 or 2 } offset slot so multiple pets don't stack
+
+--- Get the X offset for a pet so multiple pets walk side by side
+--- Pet 1 walks on the left (-1.2), Pet 2 on the right (+1.2)
+---@param hash string Pet hash
+---@return number xOffset
+local function getPetLateralOffset(hash)
+    if not petSlotIndex[hash] then
+        -- Assign next available slot
+        local used = {}
+        for _, slot in pairs(petSlotIndex) do used[slot] = true end
+        petSlotIndex[hash] = used[1] and 2 or 1
+    end
+    -- Slot 1 = left side, Slot 2 = right side
+    return petSlotIndex[hash] == 1 and -1.2 or 1.2
+end
+local idleTimers = {}           -- { [hash] = seconds stopped }
+local idleState = {}            -- { [hash] = 'following'|'idle_sit'|'idle_wander'|'idle_anim' }
+local lastVocalize = {}         -- { [hash] = gameTimer }
+local lastNearbyPedBark = 0     -- global cooldown for barking at strangers
+local wasPlayerSprinting = false
+local lastPetInteract = 0       -- cooldown for pet-to-pet interactions
+local lastWaterReact = {}       -- { [hash] = gameTimer } water reaction cooldown
+local petWaterState = {}        -- { [hash] = bool } track if pet was in water
+
+--- Determine the right follow speed based on player state AND pet distance.
+---@param plyPed number Player ped
+---@param level number Pet level
+---@param dist? number Distance between pet and player (optional)
+---@return number speed
+local function getContextualSpeed(plyPed, level, dist)
+    local baseSpeed = Config.getFollowSpeed(level)
+    dist = dist or 0
+
+    -- Far away: always sprint
+    if dist > 10.0 then
+        return math.max(baseSpeed, 5.0)
+    elseif dist > 5.0 then
+        return math.max(baseSpeed, 4.0)
     end
 
-    local coord = GetEntityCoords(plyPed)
-    if IsPedStopped(plyPed) and not IsPedInAnyVehicle(plyPed, false) then
-        if timeOut[1] < Config.balance.afk.resetAfter then
-            timeOut[1] = timeOut[1] + 1
-            if timeOut[1] == Config.balance.afk.wanderInterval then
-                if not timeOut.lastAction or timeOut.lastAction == 'animation' then
-                    ClearPedTasks(ped)
-                    TaskWanderInArea(ped, coord, 4.0, 2, 8.0)
-                    timeOut.lastAction = 'wandering'
-                end
-            end
-            if timeOut[1] == Config.balance.afk.animInterval then
-                ClearPedTasks(ped)
-                Anims.play(ped, animClass, 'sit')
-                timeOut.lastAction = 'animation'
-            end
-        else
-            timeOut[1] = 0
-        end
+    -- Close: match player pace
+    if IsPedSprinting(plyPed) then
+        return math.max(baseSpeed, 5.0)
+    elseif IsPedRunning(plyPed) then
+        return math.max(baseSpeed, 3.5)
+    elseif IsPedWalking(plyPed) then
+        return 1.5
     else
-        timeOut[1] = 0
+        return baseSpeed
     end
 end
 
-local enforceFollowCooldowns = {} -- { [hash] = gameTimer }
+--- Get the move rate multiplier for SetPedMoveRateOverride
+--- This physically makes the pet move faster, separate from the task speed
+---@param plyPed number Player ped
+---@param dist number Distance to player
+---@return number rate (1.0 = normal)
+local function getMoveRate(plyPed, dist)
+    local rates = Config.progression.moveRate
+    if not rates then return 1.0 end
 
---- Re-issue follow if pet has drifted too far from the player
+    -- Far behind: crank it up to catch up
+    if dist > 10.0 then
+        return rates.catchUp or 1.8
+    end
+
+    -- Match player movement state
+    if IsPedSprinting(plyPed) then
+        return rates.sprint or 1.5
+    elseif IsPedRunning(plyPed) then
+        return rates.jogging or 1.35
+    elseif IsPedWalking(plyPed) then
+        return rates.walking or 1.2
+    else
+        return rates.idle or 1.0
+    end
+end
+
+--- Natural idle behavior — runs for ALL pets when player stops moving
 ---@param ped number Pet entity
 ---@param plyPed number Player entity
 ---@param hash string Pet hash
-local function enforceFollow(ped, plyPed, hash)
-    -- Bail if entities are invalid
+---@param animClass string|nil Animation class
+---@param petConfig table|nil Pet config
+local function ambientBehavior(ped, plyPed, hash, animClass, petConfig)
+    local cfg = Config.balance.ambient
+    if not cfg or not cfg.enabled then return end
+
+    -- Safety: bail if entity is gone
+    if not DoesEntityExist(ped) then return end
+
+    -- Skip pets in special states
+    if IsGuarding(hash) then return end
+    if IsBusy(hash) then return end
+    if IsCarrying(hash) then return end
+    if IsPedInAnyVehicle(ped, false) then return end
+    if IsPedInCombat(ped) then return end
+    if IsEntityDead(ped) then return end
+
+    local playerStopped = IsPedStopped(plyPed) and not IsPedInAnyVehicle(plyPed, false)
+    local now = GetGameTimer()
+
+    -- ---- Sprint excitement: pet barks happily when owner sprints ----
+    if cfg.sprintExcitement and not IsWaiting(hash) then
+        local sprinting = IsPedSprinting(plyPed)
+        if sprinting and not wasPlayerSprinting then
+            if animClass and math.random() < 0.4 then
+                SetAnimalMood(ped, 1) -- playful
+                PlayAnimalVocalization(ped, 3, 'bark')
+            end
+        end
+    end
+
+    -- ---- Random ambient vocalizations while moving ----
+    if not playerStopped and not IsWaiting(hash) then
+        local lastVoc = lastVocalize[hash] or 0
+        if now - lastVoc > 15000 and math.random() < cfg.vocalizeChance then
+            lastVocalize[hash] = now
+            local vocType = math.random() > 0.7 and 'whine' or 'bark'
+            PlayAnimalVocalization(ped, 3, vocType)
+        end
+    end
+
+    -- ---- Bark at strangers who approach ----
+    if cfg.reactToNearbyPeds and now - lastNearbyPedBark > cfg.nearbyPedCooldown then
+        local petPos = GetEntityCoords(ped)
+        local pedPool = GetGamePool('CPed')
+        for _, nearPed in ipairs(pedPool) do
+            if nearPed ~= ped and nearPed ~= plyPed
+               and not IsPedAPlayer(nearPed)
+               and not IsEntityDead(nearPed) then
+                local dist = #(petPos - GetEntityCoords(nearPed))
+                if dist < cfg.nearbyPedRadius then
+                    SetAnimalMood(ped, 0) -- alert
+                    PlayAnimalVocalization(ped, 3, 'bark')
+                    lastNearbyPedBark = now
+                    -- Look at the stranger
+                    makeEntityFaceEntity(ped, nearPed)
+                    Wait(0) -- yield so face takes effect
+                    break
+                end
+            end
+        end
+    end
+
+    -- ---- Idle behavior when player is standing still ----
+    if playerStopped then
+        idleTimers[hash] = (idleTimers[hash] or 0) + 1
+
+        local idleSecs = idleTimers[hash]
+        local state = idleState[hash] or 'following'
+
+        -- Phase 1: After threshold seconds, pet sits down
+        if idleSecs == cfg.idleThreshold and state == 'following' then
+            if animClass and Anims.hasAction(animClass, 'sit') then
+                ClearPedTasks(ped)
+                Anims.play(ped, animClass, 'sit')
+                idleState[hash] = 'idle_sit'
+            end
+
+        -- Phase 2: After wanderInterval, pet gets up and sniffs around
+        -- If owner has another pet, go interact with them instead of random wandering
+        elseif idleSecs == Config.balance.afk.wanderInterval and state == 'idle_sit' then
+            ClearPedTasks(ped)
+            local didSibling = false
+
+            -- Check for a sibling pet (same owner, different hash)
+            for sibHash, sibData in pairs(ActivePed.pets) do
+                if sibHash ~= hash and DoesEntityExist(sibData.entity) and not IsEntityDead(sibData.entity) then
+                    local sibDist = #(GetEntityCoords(ped) - GetEntityCoords(sibData.entity))
+                    if sibDist < 10.0 then
+                        -- Walk over to sibling and interact
+                        makeEntityFaceEntity(ped, sibData.entity)
+                        TaskGoToEntity(ped, sibData.entity, -1, 0.8, 2.0, 0, 0)
+                        SetAnimalMood(ped, 1) -- playful
+                        Wait(1500)
+                        if DoesEntityExist(ped) and DoesEntityExist(sibData.entity) then
+                            PlayAnimalVocalization(ped, 3, 'bark')
+                            Wait(600)
+                            PlayAnimalVocalization(sibData.entity, 3, 'bark')
+                        end
+                        didSibling = true
+                        break
+                    end
+                end
+            end
+
+            if not didSibling then
+                -- No sibling nearby, wander randomly
+                local coord = GetEntityCoords(plyPed)
+                TaskWanderInArea(ped, coord.x, coord.y, coord.z, 4.0, 2, 8.0)
+            end
+            idleState[hash] = 'idle_wander'
+            if math.random() < 0.5 then
+                PlayAnimalVocalization(ped, 3, 'whine')
+            end
+
+        -- Phase 3: After animInterval, play a random idle anim (sleep, bark, etc)
+        elseif idleSecs == Config.balance.afk.animInterval and state == 'idle_wander' then
+            ClearPedTasks(ped)
+            -- Pick a random idle action
+            local idleAnims = { 'sit', 'sleep', 'bark' }
+            local pick = idleAnims[math.random(#idleAnims)]
+            if animClass and Anims.hasAction(animClass, pick) then
+                Anims.play(ped, animClass, pick)
+            end
+            idleState[hash] = 'idle_anim'
+
+        -- Phase 4: After resetAfter, cycle back
+        elseif idleSecs >= Config.balance.afk.resetAfter then
+            idleTimers[hash] = 0
+            idleState[hash] = 'following'
+        end
+    else
+        -- Player moved — reset idle state and resume following
+        if idleTimers[hash] and idleTimers[hash] >= cfg.idleThreshold then
+            -- Pet was idling, snap back to following
+            idleState[hash] = 'following'
+        end
+        idleTimers[hash] = 0
+    end
+
+    -- ---- Pet-to-pet interactions ----
+    -- Scan for other pets (MFPETS_COMPANION relationship group) and play social anims
+    if cfg.reactToNearbyPeds and now - lastPetInteract > 20000 then -- 20s cooldown
+        local petPos = GetEntityCoords(ped)
+        local companionHash = GetHashKey('MFPETS_COMPANION')
+        local pedPool = GetGamePool('CPed')
+        for _, nearPed in ipairs(pedPool) do
+            if nearPed ~= ped and nearPed ~= plyPed
+               and DoesEntityExist(nearPed) and not IsEntityDead(nearPed)
+               and GetPedRelationshipGroupHash(nearPed) == companionHash then
+
+                local dist = #(petPos - GetEntityCoords(nearPed))
+                if dist < 6.0 and math.random() < 0.3 then
+                    lastPetInteract = now
+
+                    -- Pick a random social behavior
+                    local roll = math.random(3)
+                    if roll == 1 then
+                        -- Sniff: walk up to the other pet
+                        makeEntityFaceEntity(ped, nearPed)
+                        TaskGoToEntity(ped, nearPed, -1, 1.0, 2.0, 0, 0)
+                        SetAnimalMood(ped, 1) -- playful
+                        Wait(2000)
+                        PlayAnimalVocalization(ped, 3, 'bark')
+                    elseif roll == 2 then
+                        -- Playful bark exchange
+                        makeEntityFaceEntity(ped, nearPed)
+                        PlayAnimalVocalization(ped, 3, 'bark')
+                        Wait(800)
+                        PlayAnimalVocalization(nearPed, 3, 'bark')
+                    else
+                        -- Both sit near each other
+                        if animClass and Anims.hasAction(animClass, 'bark') then
+                            Anims.play(ped, animClass, 'bark')
+                        end
+                    end
+                    break
+                end
+            end
+        end
+    end
+
+    -- ---- Water reactions ----
+    -- Skip entirely if pet is in a vehicle (prevents entity lookup crashes)
+    if not IsPedInAnyVehicle(ped, false) and DoesEntityExist(ped) then
+        local submerged = GetEntitySubmergedLevel(ped)
+        local wasInWater = petWaterState[hash] or false
+        local inWater = submerged > 0.15
+        local waterCooldown = lastWaterReact[hash] or 0
+
+        if inWater and not wasInWater and now - waterCooldown > 15000 then
+            lastWaterReact[hash] = now
+            SetAnimalMood(ped, 1)
+            PlayAnimalVocalization(ped, 3, 'bark')
+            local size = petConfig and petConfig.size or 'large'
+            if size == 'small' then
+                PlayAnimalVocalization(ped, 3, 'whine')
+            end
+        elseif not inWater and wasInWater and now - waterCooldown > 15000 then
+            lastWaterReact[hash] = now
+            if animClass and Anims.hasAction(animClass, 'bark') then
+                Anims.play(ped, animClass, 'bark')
+            end
+            PlayAnimalVocalization(ped, 3, 'bark')
+        end
+        petWaterState[hash] = inWater
+    end
+end
+
+--- Smart follow: speed-matches the player with a persistent follow task.
+--- Uses the frkn-k9 pattern: offset directly behind player, infinite timeout,
+--- only re-issue when speed tier changes or pet drifts very far.
+---@param ped number Pet entity
+---@param plyPed number Player entity
+---@param hash string Pet hash
+local function smartFollow(ped, plyPed, hash)
     if not DoesEntityExist(ped) or plyPed == 0 then return end
 
     -- Skip pets in special states
@@ -535,6 +868,7 @@ local function enforceFollow(ped, plyPed, hash)
     if IsGuarding(hash) then return end
     if IsInAggroCombat(hash) then return end
     if IsBusy(hash) then return end
+    if IsCarrying(hash) then return end
     if IsPedInCombat(ped) then return end
     if IsPedInAnyVehicle(ped, false) then return end
     if IsPedInAnyVehicle(plyPed, false) then return end
@@ -543,32 +877,154 @@ local function enforceFollow(ped, plyPed, hash)
     local petPos = GetEntityCoords(ped)
     local plyPos = GetEntityCoords(plyPed)
     local dist = #(petPos - plyPos)
+    local activePed = ActivePed:findByHash(hash)
+    local level = activePed and activePed.item.metadata.level or 0
 
-    -- Teleport failsafe: if pet is extremely far, warp it close
+    -- Teleport failsafe: pet is extremely far — warp close and immediately run
     if dist > 50.0 then
-        local spawnPos = getSpawnLocation(plyPed)
-        SetEntityCoords(ped, spawnPos.x, spawnPos.y, spawnPos.z, false, false, false, false)
-        local activePed = ActivePed:findByHash(hash)
-        local moveSpeed = activePed and Config.getFollowSpeed(activePed.item.metadata.level or 0) or 5.0
-        TaskFollowToOffsetOfEntity(ped, plyPed, 2.5, 2.5, 2.5, moveSpeed, 10.0, 3.0, 1)
-        enforceFollowCooldowns[hash] = GetGameTimer()
+        local offsetX = getPetLateralOffset(hash)
+        local behindPos = GetOffsetFromEntityInWorldCoords(plyPed, offsetX, -3.0, 0.0)
+        local found, groundZ = GetGroundZFor_3dCoord(behindPos.x, behindPos.y, behindPos.z + 2.0, false)
+        if found then behindPos = vector3(behindPos.x, behindPos.y, groundZ) end
+        SetEntityCoords(ped, behindPos.x, behindPos.y, behindPos.z, false, false, false, false)
+        TaskFollowToOffsetOfEntity(ped, plyPed, offsetX, -1.5, 0.0, 5.0, -1, 1.5, true)
+        followCooldowns[hash] = GetGameTimer()
+        lastFollowSpeed[hash] = 5.0
         return
     end
 
-    -- Only re-issue follow when pet has drifted significantly (20m+)
-    if dist > 20.0 then
-        -- Cooldown: don't re-issue more than once every 5 seconds
-        local now = GetGameTimer()
-        local lastIssued = enforceFollowCooldowns[hash] or 0
-        if now - lastIssued < 5000 then return end
-        enforceFollowCooldowns[hash] = now
+    -- Apply move rate multiplier (makes the pet physically faster)
+    -- Must be called every tick — it resets each frame
+    local moveRate = getMoveRate(plyPed, dist)
+    SetPedMoveRateOverride(ped, moveRate)
 
-        -- Re-issue follow directly (skip ClearPedTasks to avoid visible stutter)
-        local activePed = ActivePed:findByHash(hash)
-        local moveSpeed = activePed and Config.getFollowSpeed(activePed.item.metadata.level or 0) or 5.0
-        TaskFollowToOffsetOfEntity(ped, plyPed, 2.5, 2.5, 2.5, moveSpeed, 10.0, 3.0, 1)
+    -- Determine desired speed
+    local desiredSpeed = getContextualSpeed(plyPed, level, dist)
+    local currentSpeed = lastFollowSpeed[hash] or -1
+
+    -- Lateral offset so multiple pets don't stack on top of each other
+    local offsetX = getPetLateralOffset(hash)
+
+    -- Determine follow offset: behind normally, AHEAD when sprinting
+    local sprinting = IsPedSprinting(plyPed)
+    local offsetY = -1.5 -- behind player
+    if sprinting and Config.progression.sprintAhead and dist < 8.0 then
+        offsetY = 2.5 -- ahead of player (dog runs in front)
+    end
+
+    -- Only re-issue follow when speed tier changes significantly or offset flipped
+    local speedChanged = math.abs(desiredSpeed - currentSpeed) > 1.2
+    local driftedFar = dist > 25.0
+    local lastOffset = lastFollowSpeed[hash .. '_offset'] or -1.5
+    local offsetFlipped = (offsetY > 0) ~= (lastOffset > 0)
+
+    if speedChanged or driftedFar or offsetFlipped or currentSpeed < 0 then
+        local now = GetGameTimer()
+        local lastIssued = followCooldowns[hash] or 0
+        if now - lastIssued < 5000 then return end
+        followCooldowns[hash] = now
+        lastFollowSpeed[hash] = desiredSpeed
+        lastFollowSpeed[hash .. '_offset'] = offsetY
+
+        TaskFollowToOffsetOfEntity(ped, plyPed, offsetX, offsetY, 0.0, desiredSpeed, -1, 1.5, true)
     end
 end
+
+-- ============================
+--   Auto-Defend (gameEvent)
+-- ============================
+-- Pet automatically attacks anyone who damages the owner.
+-- No toggle, no level gate — any pet defends. Higher level = better combat stats.
+
+AddEventHandler('gameEventTriggered', function(eventName, args)
+    if eventName ~= 'CEventNetworkEntityDamage' then return end
+
+    local cfg = Config.balance.ambient
+    if not cfg or not cfg.autoDefend then return end
+
+    local victim = args[1]
+    local attacker = args[2]
+    local playerPed = PlayerPedId()
+
+    -- Only react when the OWNER takes damage
+    if victim ~= playerPed then return end
+    if not attacker or attacker == playerPed or attacker == 0 then return end
+    if not DoesEntityExist(attacker) or IsEntityDead(attacker) then return end
+
+    -- Send all active pets to attack the threat
+    for hash, petData in pairs(ActivePed.pets) do
+        if DoesEntityExist(petData.entity)
+           and not IsEntityDead(petData.entity)
+           and not IsGuarding(hash)
+           and not IsBusy(hash)
+           and not IsCarrying(hash)
+           and not IsPedInAnyVehicle(petData.entity, false) then
+
+            -- Scale combat ability by level (level 0 = weak, level 50 = lethal)
+            local level = petData.item.metadata.level or 0
+            local ability = math.min(100, 20 + level * 1.6) -- 20 at level 0, 100 at level 50
+            SetPedCombatAbility(petData.entity, math.floor(ability))
+
+            -- Delegate to existing AttackTargetedPed (handles relationship groups, re-engagement)
+            local capturedPed = petData.entity
+            local capturedAttacker = attacker
+            local capturedHash = hash
+            SetBusy(capturedHash, true)
+            CreateThread(function()
+                AttackTargetedPed(capturedPed, capturedAttacker)
+                SetBusy(capturedHash, false)
+
+                -- Award defending XP
+                TriggerServerEvent('murderface-pets:server:updatePetStats',
+                    capturedHash, { key = 'activity', action = 'defending' })
+            end)
+        end
+    end
+end)
+
+-- ============================
+--   Gunshot Cower (small pets)
+-- ============================
+
+local lastGunshotCower = 0
+
+AddEventHandler('gameEventTriggered', function(eventName, args)
+    if eventName ~= 'CEventNetworkEntityDamage' then return end
+
+    local cfg = Config.balance.ambient
+    if not cfg or not cfg.cowerOnGunshots then return end
+
+    local now = GetGameTimer()
+    if now - lastGunshotCower < 10000 then return end -- 10s cooldown
+
+    local victim = args[1]
+    if not DoesEntityExist(victim) then return end
+
+    local playerPos = GetEntityCoords(PlayerPedId())
+    local eventPos = GetEntityCoords(victim)
+    if #(playerPos - eventPos) > cfg.gunshotRadius then return end
+
+    -- Small pets cower, big pets bark
+    for hash, petData in pairs(ActivePed.pets) do
+        if DoesEntityExist(petData.entity) and not IsEntityDead(petData.entity)
+           and not IsPedInCombat(petData.entity)
+           and not IsGuarding(hash) then
+            local size = petData.petConfig and petData.petConfig.size or 'large'
+            if size == 'small' then
+                -- Small pet cowers — crouch/sit animation
+                if petData.animClass and Anims.hasAction(petData.animClass, 'sit') then
+                    Anims.play(petData.entity, petData.animClass, 'sit')
+                    PlayAnimalVocalization(petData.entity, 3, 'whine')
+                end
+            else
+                -- Big pet gets alert — bark toward the sound
+                SetAnimalMood(petData.entity, 0)
+                PlayAnimalVocalization(petData.entity, 3, 'bark')
+            end
+            lastGunshotCower = now
+        end
+    end
+end)
 
 -- ============================
 --     Active Pet Thread
@@ -583,13 +1039,32 @@ function createActivePetThread(ped, item)
         if not savedData then return end
 
         local finished = false
-        local timeOut = { 0, lastAction = nil }
+
+        -- Auto-start aggro for dogs/wild species (always-on defense)
+        local hash = item.metadata.hash
+        local species = savedData.petConfig and savedData.petConfig.species
+        if species == 'dog' or species == 'wild' then
+            if not IsAggroEnabled(hash) then
+                StartAggro(hash)
+            end
+        end
 
         while DoesEntityExist(ped) and not finished do
-            local plyPed = PlayerPedId() -- refresh each tick; handle changes on death/respawn
-            local hash = item.metadata.hash
-            afkWandering(timeOut, plyPed, ped, savedData.animClass, hash)
-            enforceFollow(ped, plyPed, hash)
+            local plyPed = PlayerPedId()
+
+            -- Ensure we still have network control (OneSync can steal it)
+            if not NetworkHasControlOfEntity(ped) then
+                NetworkRequestControlOfEntity(ped)
+            end
+
+            -- Natural behaviors (idle, vocalize, react to environment)
+            ambientBehavior(ped, plyPed, hash, savedData.animClass, savedData.petConfig)
+
+            -- Smart following (speed-matches player movement)
+            smartFollow(ped, plyPed, hash)
+
+            -- Track sprint state for excitement reactions
+            wasPlayerSprinting = IsPedSprinting(plyPed)
 
             -- Update server every N seconds
             if tmpcount >= count then
@@ -599,34 +1074,53 @@ function createActivePetThread(ped, item)
             end
             tmpcount = tmpcount + 1
 
-            -- Update health
+            -- Safety: if entity disappeared or lost network, skip updates
+            if not DoesEntityExist(ped) then
+                finished = true
+                break
+            end
+
+            -- Update health (only if entity has valid network ID)
             local currentHealth = GetEntityHealth(savedData.entity)
-            if not IsPedDeadOrDying(savedData.entity) and
-               savedData.maxHealth ~= currentHealth and
-               savedData.health ~= currentHealth then
+            local netId = NetworkGetNetworkIdFromEntity(ped)
+            if netId and netId ~= 0
+               and not IsPedDeadOrDying(savedData.entity)
+               and savedData.maxHealth ~= currentHealth
+               and savedData.health ~= currentHealth then
                 TriggerServerEvent('murderface-pets:server:updatePetStats',
                     savedData.item.metadata.hash, {
                         key = 'health',
-                        netId = NetworkGetNetworkIdFromEntity(ped),
+                        netId = netId,
                     })
                 savedData.health = currentHealth
             end
 
             -- Pet has died — keep dead until revived/despawned
             if IsPedDeadOrDying(savedData.entity, true) then
+                DetachLeash(savedData.item.metadata.hash)
                 StopGuard(savedData.item.metadata.hash)
                 StopAggro(savedData.item.metadata.hash)
                 SetWaiting(savedData.item.metadata.hash, false)
                 local c_health = GetEntityHealth(savedData.entity)
                 if c_health <= 100 then
-                    TriggerServerEvent('murderface-pets:server:updatePetStats',
-                        savedData.item.metadata.hash, {
-                            key = 'health',
-                            netId = NetworkGetNetworkIdFromEntity(ped),
-                        })
-                    -- Prevent GTA auto-revive loop
+                    local deathNetId = NetworkGetNetworkIdFromEntity(ped)
+                    if deathNetId and deathNetId ~= 0 then
+                        TriggerServerEvent('murderface-pets:server:updatePetStats',
+                            savedData.item.metadata.hash, {
+                                key = 'health',
+                                netId = deathNetId,
+                            })
+                    end
+                    -- Prevent GTA auto-revive loop — but check for revive flag
+                    -- NOTE: Don't clear reviveFlags here — a revive could already be pending
                     while DoesEntityExist(ped) do
-                        if not IsPedDeadOrDying(ped, true) then
+                        if reviveFlags[hash] then
+                            -- Server triggered a revive — break out, let the revive handler take over
+                            reviveFlags[hash] = nil
+                            finished = true
+                            break
+                        end
+                        if not IsPedDeadOrDying(ped, true) and not reviveFlags[hash] then
                             SetEntityHealth(ped, 0)
                         end
                         Wait(1000)
@@ -646,6 +1140,7 @@ end
 RegisterNetEvent('murderface-pets:client:forceKill', function(hash, reason)
     local petData = ActivePed:findByHash(hash)
     if not petData then return end
+    if not DoesEntityExist(petData.entity) then return end
     if GetEntityHealth(petData.entity) < 100 then return end
 
     petData.health = 0
@@ -662,6 +1157,8 @@ end)
 -- ============================
 
 RegisterNetEvent('murderface-pets:client:despawnPet', function(hash, instant)
+    if IsCarrying(hash) then DropPet(hash) end
+    DetachLeash(hash)
     StopGuard(hash)
     StopAggro(hash)
     SetWaiting(hash, false)
@@ -693,6 +1190,8 @@ end)
 -- ============================
 
 RegisterNetEvent('qbx_core:client:onLogout', function()
+    DropCarriedPet()
+    DetachAllLeashes()
     StopAllGuards()
     StopAllAggro()
     ClearAllWaiting()
@@ -973,28 +1472,41 @@ CreateThread(function()
         local inVehicle = IsPedInAnyVehicle(plyPed, false)
 
         if inVehicle and not wasInVehicle then
+            -- Drop carried pet before boarding
+            DropCarriedPet()
             -- Owner just got in a vehicle — board all pets that fit
             -- Skip invisible/scripted vehicles (e.g. skateboard's hidden BMX)
             local vehicle = GetVehiclePedIsUsing(plyPed)
             if vehicle and vehicle ~= 0 and IsEntityVisible(vehicle) then
                 for _, petData in pairs(ActivePed.pets) do
                     local hash = petData.item and petData.item.metadata and petData.item.metadata.hash
-                    if DoesEntityExist(petData.entity) and not IsPedInAnyVehicle(petData.entity, false)
+                    if DoesEntityExist(petData.entity) and not IsEntityDead(petData.entity)
+                        and not IsPedInAnyVehicle(petData.entity, false)
                         and not (hash and IsGuarding(hash))
                         and not (hash and IsInAggroCombat(hash)) then
+                        if hash then DetachLeash(hash) end
                         putPetInVehicle(vehicle, petData.entity)
                     end
                 end
             end
         elseif not inVehicle and wasInVehicle then
-            -- Owner just exited — pull all pets out and resume follow
+            -- Owner just exited — pull all pets out to the side and resume follow
+            local exitSlot = 0
             for _, petData in pairs(ActivePed.pets) do
-                if DoesEntityExist(petData.entity) and IsPedInAnyVehicle(petData.entity, false) then
-                    local coord = getSpawnLocation(plyPed)
-                    SetEntityCoords(petData.entity, coord.x, coord.y, coord.z, false, false, false, false)
+                if DoesEntityExist(petData.entity) and not IsEntityDead(petData.entity) and IsPedInAnyVehicle(petData.entity, false) then
+                    -- Stagger exit positions so multiple pets don't stack
+                    exitSlot = exitSlot + 1
+                    local lateralOff = exitSlot == 1 and -2.5 or -2.5 -- both left, but stagger forward/back
+                    local forwardOff = exitSlot == 1 and 0.0 or 2.0
+                    local exitPos = GetOffsetFromEntityInWorldCoords(plyPed, lateralOff, forwardOff, 0.0)
+                    -- Find actual ground Z to avoid floating/clipping
+                    local found, groundZ = GetGroundZFor_3dCoord(exitPos.x, exitPos.y, exitPos.z + 2.0, false)
+                    if found then
+                        exitPos = vector3(exitPos.x, exitPos.y, groundZ)
+                    end
+                    SetEntityCoords(petData.entity, exitPos.x, exitPos.y, exitPos.z, false, false, false, false)
                     Wait(100)
-                    ClearPedTasks(petData.entity)
-                    TaskFollowTargetedPlayer(petData.entity, plyPed, 3.0, true)
+                    TaskFollowTargetedPlayer(petData.entity, plyPed, 1.5, true)
                 end
             end
         end
@@ -1083,5 +1595,66 @@ RegisterCommand('petemote', function(_, args)
     end
     if emote.anim and activePed.animClass then
         Anims.play(ped, activePed.animClass, emote.anim)
+    end
+    -- Trick-based emotes (dance = beg trick, paw = paw trick)
+    if emote.trick and activePed.animClass then
+        Anims.playSub(ped, activePed.animClass, 'tricks', emote.trick)
+    end
+    -- Special emotes (fetch)
+    if emote.special == 'fetch' then
+        CreateThread(function()
+            local fetchHash = activePed.item.metadata.hash
+            SetBusy(fetchHash, true)
+            local playerPed = PlayerPedId()
+            local playerPos = GetEntityCoords(playerPed)
+            local forward = GetEntityForwardVector(playerPed)
+            local throwTarget = playerPos + forward * 15.0
+
+            -- Player throw animation
+            lib.requestAnimDict('anim@arena@celeb@flat@paired@no_props@')
+            TaskPlayAnim(playerPed, 'anim@arena@celeb@flat@paired@no_props@', 'throw_a_player_a', 8.0, -8.0, 1500, 0, 0, false, false, false)
+
+            -- Spawn tennis ball prop
+            lib.requestModel(`prop_tennis_ball`)
+            local ball = CreateObject(`prop_tennis_ball`, playerPos.x, playerPos.y, playerPos.z + 1.5, true, true, false)
+            Wait(400)
+            if DoesEntityExist(ball) then
+                ApplyForceToEntity(ball, 1, forward.x * 12.0, forward.y * 12.0, 6.0, 0.0, 0.0, 0.0, 0, false, true, true, false, true)
+            end
+
+            -- Pet chases ball
+            Wait(500)
+            if DoesEntityExist(ball) and DoesEntityExist(ped) then
+                local ballPos = GetEntityCoords(ball)
+                TaskGoToCoordAnyMeans(ped, ballPos.x, ballPos.y, ballPos.z, 5.0, 0, 0, 0, 0)
+            end
+
+            -- Wait for pet to reach ball area
+            local timeout = 0
+            while DoesEntityExist(ball) and DoesEntityExist(ped) and timeout < 30 do
+                local petPos = GetEntityCoords(ped)
+                local ballPos = GetEntityCoords(ball)
+                if #(petPos - ballPos) < 2.0 then break end
+                Wait(500)
+                timeout = timeout + 1
+            end
+
+            -- Pet picks up ball (play pickup anim), delete ball, return
+            if DoesEntityExist(ball) then
+                DeleteEntity(ball)
+            end
+            if DoesEntityExist(ped) and not IsEntityDead(ped) then
+                if activePed.animClass then
+                    Anims.play(ped, activePed.animClass, 'pickup')
+                end
+                Wait(2000)
+                TaskFollowTargetedPlayer(ped, PlayerPedId(), 3.0, true)
+
+                -- Award petting XP for playing fetch
+                TriggerServerEvent('murderface-pets:server:updatePetStats',
+                    activePed.item.metadata.hash, { key = 'activity', action = 'petting' })
+            end
+            SetBusy(fetchHash, false)
+        end)
     end
 end, false)
