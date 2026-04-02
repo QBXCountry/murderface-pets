@@ -424,6 +424,30 @@ RegisterNetEvent('murderface-pets:server:syncLeash', function(petNetId, leashed,
 end)
 
 -- ============================
+--    Leash Item Exports
+-- ============================
+
+local function handleLeashItem(propModel)
+    return function(event, item, inventory)
+        if event ~= 'usingItem' then return end
+        local src = inventory.id
+        TriggerClientEvent('murderface-pets:client:useLeash', src, propModel)
+        return false -- don't consume the item
+    end
+end
+
+exports(Config.items.leash.name, handleLeashItem('leash_model'))
+
+-- Register color variant exports if those items exist
+if Config.leash and Config.leash.models then
+    for _, leashCfg in ipairs(Config.leash.models) do
+        if leashCfg.item ~= Config.items.leash.name then
+            exports(leashCfg.item, handleLeashItem(leashCfg.prop))
+        end
+    end
+end
+
+-- ============================
 --    Pet Item Exports
 -- ============================
 
@@ -642,13 +666,13 @@ RegisterNetEvent('murderface-pets:server:healPet', function(hash, _model, proces
         TriggerClientEvent('murderface-pets:client:updateHealth', src, hash, petData.metadata.health)
         TriggerClientEvent('ox_lib:notify', src, { description = msg, type = 'success' })
     else
-        -- Revive
-        petData.metadata.health = 100 + Config.items.firstaid.reviveBonus
+        -- Revive: resurrect pet in-place instead of despawning
+        local newHealth = 100 + Config.items.firstaid.reviveBonus
+        petData.metadata.health = newHealth
         petData.dirty = true -- O1
         Pet:saveData(src, hash)
-        Pet:despawnPet(src, hash, true)
-        local msg = string.format(Lang:t('success.successful_revive'), petData.metadata.name)
-        TriggerClientEvent('ox_lib:notify', src, { description = msg, type = 'success' })
+        -- Tell client to resurrect the entity on the ground
+        TriggerClientEvent('murderface-pets:client:revivePet', src, hash, newHealth)
     end
 end)
 
