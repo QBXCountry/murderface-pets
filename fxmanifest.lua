@@ -3,7 +3,7 @@ games { 'gta5' }
 
 name         'murderface-pets'
 author       'Murderface (FMRP)'
-version      '1.3.0'
+version      '2.0.0'
 license      'MIT'
 repository   'https://github.com/fruitmob/murderface-pets'
 description  'Pet companion system for FiveM — 26 breeds, XP progression, AI behaviors, leash, K9, hunting. Qbox/ox stack.'
