@@ -696,8 +696,8 @@ local function ambientBehavior(ped, plyPed, hash, animClass, petConfig)
     end
 
     -- ---- Bark at strangers who approach ----
-    -- Throttle GetGamePool scans to every 5 seconds (expensive call)
-    if cfg.reactToNearbyPeds and now - lastNearbyPedBark > cfg.nearbyPedCooldown and now - lastStrangerScan > 5000 then
+    -- Throttle GetGamePool scans to every 8 seconds (expensive native call)
+    if cfg.reactToNearbyPeds and now - lastNearbyPedBark > cfg.nearbyPedCooldown and now - lastStrangerScan > 8000 then
         lastStrangerScan = now
         local petPos = GetEntityCoords(ped)
         local pedPool = GetGamePool('CPed')
@@ -1576,7 +1576,7 @@ if Config.nameTag.enabled then
                 end
             end
 
-            Wait(drawn and 0 or 500)
+            Wait(drawn and 50 or 500) -- 50ms when drawing (~20fps), 500ms when idle
         end
     end)
 end

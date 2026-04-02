@@ -284,7 +284,8 @@ CreateThread(function()
     while true do
         Wait(1000)
 
-        if not ActivePed.currentHash then
+        -- Early-out: skip all checks if no pets are active
+        if not ActivePed.currentHash or not next(ActivePed.pets) then
             ownerState.sitting = false
             ownerState.holdingFood = false
             ownerState.afk = false
@@ -292,6 +293,7 @@ CreateThread(function()
             afkTimer = 0
             lastPlayerPos = nil
             ownerDeathReacted = false
+            Wait(5000) -- sleep longer when no pets — saves cycles
             goto continue
         end
 
