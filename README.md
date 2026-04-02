@@ -131,10 +131,25 @@ All settings are in `config.lua`:
 - Breeding rules
 - Notification system (ox_lib or rtx_notify)
 
+### Owner Reactions
+Pets respond naturally to what you're doing — no commands needed:
+- **Owner sits down** — pet walks over and lays at your feet
+- **Owner eats/drinks** — dog whines and begs for food
+- **Owner goes AFK** (2 min) — pet sleeps nearby, barks when you return
+- **Owner dies** — pet sits by your body and whines
+
 ## Commands
 
 | Command | Permission | Description |
 |---------|-----------|-------------|
+| `/sit` | Everyone | Pet sits for a few seconds then resumes following |
+| `/come` | Everyone | Pet stops waiting and follows you |
+| `/stay` | Everyone | Pet stays at current position |
+| `/heel` | Everyone | Pet follows closely at your side |
+| `/speak` | Everyone | Pet barks on command |
+| `/lay` | Everyone | Pet lays down |
+| `/paw` | Everyone | Paw shake trick (level-gated) |
+| `/petname` | Everyone | Show current pet's name and level |
 | `/petemote <name>` | Everyone | Play a pet emote |
 | `/petshop` | Admin | Open breed picker, place display dogs |
 | `/petshop remove` | Admin | Remove nearest display dog |
