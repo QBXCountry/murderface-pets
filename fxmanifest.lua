@@ -17,6 +17,14 @@ shared_scripts {
     'locales/en.lua',
 }
 
+ui_page 'web/dist/index.html'
+
+files {
+    'web/dist/index.html',
+    'web/dist/assets/*.js',
+    'web/dist/assets/*.css',
+}
+
 client_scripts {
     '@qbx_core/modules/playerdata.lua',
     'client/functions.lua',
@@ -29,6 +37,7 @@ client_scripts {
     'client/commands.lua',
     'client/reactions.lua',
     'client/menu.lua',
+    'client/nui.lua',
 }
 
 server_scripts {
