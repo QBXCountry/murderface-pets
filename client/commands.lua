@@ -1,6 +1,10 @@
 -- murderface-pets: Chat command shortcuts
 -- Quick /sit, /come, /stay, /heel, /speak, /lay, /paw commands
 -- Runs the same logic as the context menu but via chat.
+--
+-- Dependencies (defined in client/functions.lua + client/client.lua + shared/animations.lua):
+--   ActivePed, Anims, SetWaiting, IsWaiting, doSomethingIfPedIsInsideVehicle,
+--   makeEntityFaceEntity, TaskFollowTargetedPlayer, Config.trickLevels, Config.getLevelTitle
 
 -- Helper: get current pet or notify
 local function getActivePet()

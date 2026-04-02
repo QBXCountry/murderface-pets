@@ -4,6 +4,9 @@
 --   Owner pulls out food -> pet whines/begs
 --   Owner goes AFK -> pet sleeps next to them
 --   Owner dies -> pet sits by body and whines (emotional RP moment)
+--
+-- Dependencies (defined in client/functions.lua + client/client.lua + shared/animations.lua):
+--   ActivePed, Anims, IsGuarding, IsBusy, IsCarrying, IsWaiting, makeEntityFaceEntity
 
 -- ============================
 --        State Tracking
@@ -31,6 +34,7 @@ local function canReact(reactionType)
     local last = reactionCooldowns[reactionType] or 0
     if now - last < REACTION_COOLDOWN then return false end
     reactionCooldowns[reactionType] = now
+    if Config.debug then print(('[murderface-pets] Owner reaction: %s'):format(reactionType)) end
     return true
 end
 
