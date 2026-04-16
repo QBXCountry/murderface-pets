@@ -26,7 +26,7 @@ ActivePed = {
 }
 
 --- Register a new spawned pet
-function ActivePed:add(model, hostile, item, ped)
+function ActivePed:add(model, hostile, item, ped, netId)
     local hash = item.metadata.hash
     local petCfg = Config.petsByItem[item.name]
 
@@ -34,6 +34,7 @@ function ActivePed:add(model, hostile, item, ped)
         model      = model,
         modelString = petCfg and petCfg.model or model,
         entity     = ped,
+        netId      = netId or NetworkGetNetworkIdFromEntity(ped),
         hostile    = hostile,
         item       = item,
         lastCoord  = GetEntityCoords(ped),
@@ -295,7 +296,7 @@ RegisterNetEvent('murderface-pets:client:spawnPet', function(modelName, hostileT
         end
 
         -- Init client data
-        ActivePed:add(modelName, hostileTowardPlayer, item, ped)
+        ActivePed:add(modelName, hostileTowardPlayer, item, ped, netId)
         local petData = ActivePed:findByHash(item.metadata.hash)
 
         -- Apply variation
