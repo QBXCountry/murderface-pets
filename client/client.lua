@@ -1148,7 +1148,6 @@ function createActivePetThread(ped, item)
                         key = 'health',
                         netId = netId,
                     })
-                savedData.health = currentHealth
             end
 
             -- Pet has died — keep dead until revived/despawned
