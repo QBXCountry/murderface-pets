@@ -537,6 +537,7 @@ RegisterNetEvent('murderface-pets:client:updateHealth', function(hash, amount)
     local petData = ActivePed:findByHash(hash)
     if not petData then return end
     if not DoesEntityExist(petData.entity) then return end
+    if not NetworkHasControlOfEntity(petData.entity) then return end
 
     local maxHealth = petData.maxHealth or 200
     local newHealth = tonumber(amount)
