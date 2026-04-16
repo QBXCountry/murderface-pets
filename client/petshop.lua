@@ -6,6 +6,9 @@ local displayData = {}   -- { [displayId] = row data from server }
 local activePoints = {}  -- lib.points proximity triggers
 local isPlacing = false
 local previewGhost = nil -- ghost ped during placement mode
+local isPetshopAdmin = false
+local aceChecked = false
+
 
 -- ============================
 --     Raycast Helper
@@ -139,12 +142,10 @@ local function spawnDisplayDog(data)
     }
 
     -- Admin-only options
-    local isAdmin = lib.callback.await(
-        'murderface-pets:server:hasPetshopAce',
-        false
-    )
-    
-    if isAdmin then
+
+if not aceChecked then return end
+
+    if aceChecked and isPetshopAdmin then
         targetOptions[#targetOptions + 1] = {
             name = 'petshop_delete_' .. id,
             icon = 'fas fa-trash',
@@ -176,7 +177,7 @@ local function spawnDisplayDog(data)
             end,
         }
     end
-
+    
     exports.ox_target:addLocalEntity(ped, targetOptions)
 end
 
@@ -237,10 +238,25 @@ RegisterNetEvent('murderface-pets:petshop:sync', function(list)
     setupProximityPoints()
 end)
 
+-- ============================
+--     check ace
+-- ============================
+
 CreateThread(function()
     if not Config.petShopAdmin or not Config.petShopAdmin.enabled then return end
     Wait(3000)
     TriggerServerEvent('murderface-pets:petshop:requestSync')
+end)
+
+CreateThread(function()
+    if not Config.petShopAdmin or not Config.petShopAdmin.enabled then return end
+
+    isPetshopAdmin = lib.callback.await(
+        'murderface-pets:server:hasPetshopAce',
+        false
+    )
+
+    aceChecked = true
 end)
 
 -- ============================
@@ -415,6 +431,8 @@ end, false)
 
 -- Cleanup on logout
 RegisterNetEvent('qbx_core:client:onLogout', function()
+    isPetshopAdmin = false
+    aceChecked = false
     despawnAllDisplays()
     -- Clean up placement ghost if active
     if isPlacing and previewGhost and DoesEntityExist(previewGhost) then
