@@ -85,6 +85,14 @@ lib.callback.register('murderface-pets:petshop:place', function(src, data)
 end)
 
 -- ============================
+--     Admin: IsPlayerAceAllowed
+-- ============================
+
+lib.callback.register('murderface-pets:server:hasPetshopAce', function(source)
+    return IsPlayerAceAllowed(source, Config.petShopAdmin.acePermission)
+end)
+
+-- ============================
 --     Admin: Delete Display
 -- ============================
 
