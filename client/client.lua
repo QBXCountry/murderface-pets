@@ -136,6 +136,7 @@ function ActivePed:petsList()
             pedHandle = data.entity,
             animClass = data.animClass,
             petConfig = data.petConfig,
+            netId = data.netId,
         }
     end
     return list
@@ -304,9 +305,29 @@ RegisterNetEvent('murderface-pets:client:spawnPet', function(modelName, hostileT
             Variations.apply(ped, petData.modelString, petData.variation)
         end
 
-        -- Set health
-        SetEntityMaxHealth(ped, petData.maxHealth)
-        SetEntityHealth(ped, math.floor(petData.item.metadata.health))
+        -- ============================
+        -- Safe Health Initialization
+        -- ============================
+        
+        local maxHealth = petData.maxHealth or 200
+        
+        local initialHealth = tonumber(petData.item.metadata.health)
+        
+        -- Se mancante o troppo bassa, forza un valore sicuro
+        if not initialHealth or initialHealth <= 100 then
+            initialHealth = maxHealth
+        end
+        
+        -- Clamp difensivo
+        initialHealth = math.min(initialHealth, maxHealth)
+        
+        SetEntityMaxHealth(ped, maxHealth)
+        SetEntityHealth(ped, math.floor(initialHealth))
+        
+        -- Allinea stato client
+        petData.health = initialHealth
+        petData.item.metadata.health = initialHealth
+        
         local currentHealth = GetEntityHealth(ped)
 
         -- ox_target interactions
@@ -514,9 +535,25 @@ end
 
 RegisterNetEvent('murderface-pets:client:updateHealth', function(hash, amount)
     local petData = ActivePed:findByHash(hash)
-    if petData and DoesEntityExist(petData.entity) then
-        SetEntityHealth(petData.entity, math.floor(amount))
+    if not petData then return end
+    if not DoesEntityExist(petData.entity) then return end
+
+    local maxHealth = petData.maxHealth or 200
+    local newHealth = tonumber(amount)
+
+    -- Ignora update illegali o pericolosi
+    if not newHealth or newHealth <= 100 then
+        return
     end
+
+    -- Clamp
+    newHealth = math.min(newHealth, maxHealth)
+
+    SetEntityHealth(petData.entity, math.floor(newHealth))
+
+    -- Sync stato client
+    petData.health = newHealth
+    petData.item.metadata.health = newHealth
 end)
 
 -- ============================
@@ -539,7 +576,11 @@ RegisterNetEvent('murderface-pets:client:revivePet', function(hash, newHealth)
     local pos = GetEntityCoords(ped)
     ResurrectPed(ped)
     SetEntityCoords(ped, pos.x, pos.y, pos.z, false, false, false, false)
-    SetEntityHealth(ped, math.floor(newHealth))
+    local maxHealth = petData.maxHealth or 200
+    local nh = tonumber(newHealth) or maxHealth
+    nh = math.min(nh, maxHealth)
+    nh = math.max(nh, 101) -- sopra soglia "dead" dei ped
+    SetEntityHealth(ped, math.floor(nh))
     ClearPedTasks(ped)
 
     -- Restore companion state
@@ -550,8 +591,8 @@ RegisterNetEvent('murderface-pets:client:revivePet', function(hash, newHealth)
     SetPedCanRagdollFromPlayerImpact(ped, false)
 
     -- Update client data
-    petData.health = newHealth
-    petData.item.metadata.health = newHealth
+    petData.health = nh
+    petData.item.metadata.health = nh
 
     -- Resume following owner
     Wait(500)
@@ -1095,10 +1136,10 @@ function createActivePetThread(ped, item)
             end
 
             -- Update health (only if entity has valid network ID)
-            local currentHealth = GetEntityHealth(savedData.entity)
+            local currentHealth = GetEntityHealth(ped)
             local netId = NetworkGetNetworkIdFromEntity(ped)
             if netId and netId ~= 0
-               and not IsPedDeadOrDying(savedData.entity)
+               and not IsPedDeadOrDying(ped)
                and savedData.maxHealth ~= currentHealth
                and savedData.health ~= currentHealth then
                 TriggerServerEvent('murderface-pets:server:updatePetStats',
@@ -1110,12 +1151,12 @@ function createActivePetThread(ped, item)
             end
 
             -- Pet has died — keep dead until revived/despawned
-            if IsPedDeadOrDying(savedData.entity, true) then
+            if IsPedDeadOrDying(ped, true) then
                 DetachLeash(savedData.item.metadata.hash)
                 StopGuard(savedData.item.metadata.hash)
                 StopAggro(savedData.item.metadata.hash)
                 SetWaiting(savedData.item.metadata.hash, false)
-                local c_health = GetEntityHealth(savedData.entity)
+                local c_health = GetEntityHealth(ped)
                 if c_health <= 100 then
                     local deathNetId = NetworkGetNetworkIdFromEntity(ped)
                     if deathNetId and deathNetId ~= 0 then
@@ -1128,15 +1169,24 @@ function createActivePetThread(ped, item)
                     -- Prevent GTA auto-revive loop — but check for revive flag
                     -- NOTE: Don't clear reviveFlags here — a revive could already be pending
                     while DoesEntityExist(ped) do
+                        -- Se è in corso un revive, NON forzare nulla
                         if reviveFlags[hash] then
-                            -- Server triggered a revive — break out, let the revive handler take over
                             reviveFlags[hash] = nil
                             finished = true
                             break
                         end
-                        if not IsPedDeadOrDying(ped, true) and not reviveFlags[hash] then
+                    
+                        -- Se NON abbiamo network control, non toccare la health
+                        if not NetworkHasControlOfEntity(ped) then
+                            Wait(1000)
+                            break
+                        end
+                    
+                        -- Evita il loop di auto‑revive di GTA
+                        if not IsPedDeadOrDying(ped, true) then
                             SetEntityHealth(ped, 0)
                         end
+                    
                         Wait(1000)
                     end
                     finished = true
@@ -1155,7 +1205,7 @@ RegisterNetEvent('murderface-pets:client:forceKill', function(hash, reason)
     local petData = ActivePed:findByHash(hash)
     if not petData then return end
     if not DoesEntityExist(petData.entity) then return end
-    if GetEntityHealth(petData.entity) < 100 then return end
+    if GetEntityHealth(petData.entity) <= 100 then return end
 
     petData.health = 0
     SetEntityHealth(petData.entity, 0)
