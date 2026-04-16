@@ -676,7 +676,8 @@ RegisterNetEvent('murderface-pets:server:healPet', function(hash, _model, proces
     end
 end)
 
--- Update XP or health from client
+-- Update XP or health from client (server-authoritative health)
+local lastHealthUpdate = {} -- [src] = { [hash] = os.time() or GetGameTimer() }
 RegisterNetEvent('murderface-pets:server:updatePetStats', function(hash, data)
     local src = source
     if not hash or type(data) ~= 'table' then return end
@@ -690,16 +691,61 @@ RegisterNetEvent('murderface-pets:server:updatePetStats', function(hash, data)
     if data.key == 'XP' then
         Update.xp(src, petData)
         petData.dirty = true -- O1
-    elseif data.key == 'activity' then
+        return
+    end
+
+    if data.key == 'activity' then
         local amount = Config.xp[data.action]
         if amount and not IsOnActivityCooldown(src, data.action) then
             Update.xpAward(src, petData, amount)
             petData.dirty = true -- O1
         end
-    else
+        return
+    end
+
+    -- ✅ SERVER-AUTHORITATIVE HEALTH
+    if data.key == 'health' then
+        local netId = tonumber(data.netId)
+
+        local now = GetGameTimer()
+        lastHealthUpdate[src] = lastHealthUpdate[src] or {}
+        local last = lastHealthUpdate[src][hash] or 0
+        if now - last < 2000 then -- max 1 update ogni 2s per pet
+            return
+        end
+        lastHealthUpdate[src][hash] = now
+
+        if not netId then return end
+
+        -- Risolvi entity dal netId
+        local ent = NetworkGetEntityFromNetworkId(netId)
+        if not ent or ent == 0 then return end
+
+        -- Leggi health reale dal ped networked
+        local rawHealth = GetEntityHealth(ent)
+
+        -- Determina maxHealth (usa quello del pet se disponibile)
+        local maxHealth = (petData.maxHealth or (petData.petConfig and petData.petConfig.maxHealth) or 200)
+
+        -- Clamp difensivo
+        local clamped = math.min(rawHealth, maxHealth)
+        clamped = math.max(clamped, 0)
+
+        -- Se vuoi evitare spam DB: aggiorna solo se cambia davvero
+        if petData.metadata and petData.metadata.health and tonumber(petData.metadata.health) == clamped then
+            return
+        end
+
+        -- Passa a Update.health SOLO il valore deciso dal server
+        data.amount = clamped
+
         Update.health(src, data, petData)
         petData.dirty = true -- O1
+        return
     end
+
+    -- Qualsiasi altra key: ignorala (evita abusi / bug)
+    return
 end)
 
 -- Grooming process
