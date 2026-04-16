@@ -139,7 +139,12 @@ local function spawnDisplayDog(data)
     }
 
     -- Admin-only options
-    if IsPlayerAceAllowed(PlayerId(), Config.petShopAdmin.acePermission) then
+    local isAdmin = lib.callback.await(
+        'murderface-pets:server:hasPetshopAce',
+        false
+    )
+    
+    if isAdmin then
         targetOptions[#targetOptions + 1] = {
             name = 'petshop_delete_' .. id,
             icon = 'fas fa-trash',
@@ -156,6 +161,7 @@ local function spawnDisplayDog(data)
                 lib.callback.await('murderface-pets:petshop:delete', false, id)
             end,
         }
+    
         targetOptions[#targetOptions + 1] = {
             name = 'petshop_price_' .. id,
             icon = 'fas fa-dollar-sign',
