@@ -4,6 +4,28 @@
 local alreadyHunting = { state = false }
 
 -- =======================================
+--    Entity Resolver (safe / OneSync)
+-- =======================================
+local function ensurePetEntity(activePed)
+    -- Se l’entity è già valida, non toccare nulla
+    if activePed.entity and activePed.entity ~= 0 and DoesEntityExist(activePed.entity) then
+        return true
+    end
+
+    -- Fallback: ricostruisce l’entity dal netId
+    local netId = activePed.netId
+    if netId and NetworkDoesNetworkIdExist(netId) then
+        local ent = NetToPed(netId)
+        if ent and ent ~= 0 and DoesEntityExist(ent) then
+            activePed.entity = ent
+            return true
+        end
+    end
+
+    return false
+end
+
+-- =======================================
 --        Supply Shop Icons
 -- =======================================
 
@@ -539,7 +561,13 @@ local function registerTricksMenu(pet)
             onSelect = value.disabled and nil or function()
                 local activePed = ActivePed:read()
                 if not activePed then return end
-                activePed.entity = NetworkGetEntityFromNetworkId(activePed.netId)
+                    if not ensurePetEntity(activePed) then
+                        lib.notify({
+                            type = 'error',
+                            description = 'Pet non sincronizzato (entity non valida)'
+                        })
+                        return
+                    end
                 value.action(PlayerPedId(), activePed)
             end,
         }
@@ -571,7 +599,13 @@ local function registerActionMenu()
                     local plyped = PlayerPedId()
                     local activePed = ActivePed:read()
                     if not activePed then return end
-                    activePed.entity = NetworkGetEntityFromNetworkId(activePed.netId)
+                        if not ensurePetEntity(activePed) then
+                            lib.notify({
+                                type = 'error',
+                                description = 'Pet non sincronizzato (entity non valida)'
+                            })
+                            return
+                        end
                     local result = value.action(plyped, activePed)
                     if result == true then
                         if value.triggerNotification then
