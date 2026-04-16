@@ -436,7 +436,7 @@ local function handleLeashItem(propModel)
     end
 end
 
-exports(Config.items.leash.name, handleLeashItem('leash_model'))
+exports(Config.items.leash.name, handleLeashItem(Config.leash.defaultModel))
 
 -- Register color variant exports if those items exist
 if Config.leash and Config.leash.models then
