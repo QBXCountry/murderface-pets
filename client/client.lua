@@ -1601,33 +1601,45 @@ end)
 if Config.nameTag.enabled then
     CreateThread(function()
         while true do
-            local plyCoords = GetEntityCoords(PlayerPedId())
-            local drawn = false
+            local plyPed = PlayerPedId()
+            local plyCoords = GetEntityCoords(plyPed)
 
             for _, petData in pairs(ActivePed.pets) do
-                if DoesEntityExist(petData.entity) and not IsEntityDead(petData.entity) then
-                    local petCoords = GetEntityCoords(petData.entity)
+                local entity = petData.entity
+
+                if entity and DoesEntityExist(entity) and not IsEntityDead(entity) then
+                    local petCoords = GetEntityCoords(entity)
                     local dist = #(plyCoords - petCoords)
 
                     if dist <= Config.nameTag.distance then
                         local name = petData.item.metadata.name or 'Pet'
-                        local headZ = petCoords.z + 1.0
-                        DrawText3D(vector3(petCoords.x, petCoords.y, headZ),
-                            name, Config.nameTag.scale)
+                        local level = petData.item.metadata.level or 0
+                        local title = Config.getLevelTitle(level)
 
+                        local headZ = petCoords.z + 1.0
+
+                        -- Nome
+                        DrawText3D(
+                            vector3(petCoords.x, petCoords.y, headZ),
+                            name,
+                            Config.nameTag.scale
+                        )
+
+                        -- Livello (opzionale)
                         if Config.nameTag.showLevel then
-                            local level = petData.item.metadata.level or 0
-                            local title = Config.getLevelTitle(level)
-                            DrawText3D(vector3(petCoords.x, petCoords.y, headZ - 0.15),
+                            DrawText3D(
+                                vector3(petCoords.x, petCoords.y, headZ - 0.15),
                                 ('Lv.%d %s'):format(level, title),
-                                Config.nameTag.scale * 0.8, 180, 220, 255, 180)
+                                Config.nameTag.scale * 0.8,
+                                180, 220, 255, 180
+                            )
                         end
-                        drawn = true
                     end
                 end
             end
 
-            Wait(drawn and 50 or 500) -- 50ms when drawing (~20fps), 500ms when idle
+            -- ✅ Wait controllato: NO deadloop, NO flicker
+            Wait(5)
         end
     end)
 end
